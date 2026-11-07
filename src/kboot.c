@@ -7422,21 +7422,61 @@ static int dt_reserve_t8132_aop_windows(const char *path)
 }
 
 /*
+ * J773g: the 26.6.2 ADT gives the AOP the J713's ASC and DART, and a DAPF bank whose 16 slices
+ * are the J713's. Admit the J713 handoff there only for that AOP: its ASC at 0x390600000
+ * (0x88000), a pre-loaded firmware with the four segments __TEXT, __DATA, __ETEXT and
+ * __OS_LOG, and the DART's DAPF bank at 0x390f10000 (0x4000) with 16 filter slices.
+ */
+static int dt_check_j773g_aop(void)
+{
+    static const char names[] = "__TEXT;__DATA;__ETEXT;__OS_LOG";
+    int aop_path[8], dart_path[8];
+    u64 base, size;
+    u32 len;
+
+    if (adt_path_offset_trace(adt, "/arm-io/aop", aop_path) < 0 ||
+        adt_get_reg(adt, aop_path, "reg", 0, &base, &size) < 0 || base != 0x390600000 ||
+        size != 0x88000)
+        return -1;
+    int nub = adt_path_offset(adt, "/arm-io/aop/iop-aop-nub");
+    const char *segment_names = nub < 0 ? NULL : adt_getprop(adt, nub, "segment-names", &len);
+    if (!segment_names || len != sizeof(names) || memcmp(segment_names, names, sizeof(names)) ||
+        !adt_getprop(adt, nub, "segment-ranges", &len) ||
+        len != 4 * sizeof(struct adt_segment_ranges))
+        return -1;
+    const u32 *preloaded = adt_getprop(adt, nub, "pre-loaded", &len);
+    if (!preloaded || len != sizeof(*preloaded) || *preloaded != 1)
+        return -1;
+    int dart = adt_path_offset_trace(adt, "/arm-io/dart-aop", dart_path);
+    if (dart < 0 || adt_get_reg(adt, dart_path, "reg", 1, &base, &size) < 0 ||
+        base != 0x390f10000 || size != 0x4000 || !adt_getprop(adt, dart, "dapf-instance-0", &len) ||
+        len != 16 * 52)
+        return -1;
+    return 0;
+}
+
+/*
  * J713: iBoot leaves the AOP halted, its DART's DAPF empty, its external code
  * (__ETEXT) in DRAM at a fixed address and its log (__OS_LOG) at a new one
  * every boot. When the OS asks for the AOP's handoff, program the DAPF, then
  * reserve both segments at the IOVAs the firmware uses (their remap
  * addresses: EC0p for __ETEXT, the physical address for __OS_LOG) and the
  * DAPF windows. Without all of it the firmware cannot run, so on any failure
- * the AOP is disabled. No other M4 board's AOP handoff is qualified: there the
- * AOP is disabled too, without touching it or its DART.
+ * the AOP is disabled. The J773g on 26.6.2 takes the same handoff when its ADT
+ * describes the AOP checked above. No other M4 board's AOP handoff is
+ * qualified: there the AOP is disabled too, without touching it or its DART.
  */
 static int dt_set_t8132_aop(const char *path)
 {
     const char *why;
     int node;
 
-    if (fdt_node_check_compatible(dt, 0, "apple,j713")) {
+    if (kboot_is_j773g(dt)) {
+        if (dt_check_j773g_aop()) {
+            why = "the ADT does not describe the J773g AOP";
+            goto disable;
+        }
+    } else if (fdt_node_check_compatible(dt, 0, "apple,j713")) {
         why = "no handoff is qualified for this board";
         goto disable;
     }
