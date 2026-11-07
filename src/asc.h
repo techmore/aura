@@ -21,6 +21,11 @@ bool asc_is_v8(asc_dev_t *asc);
 void asc_cpu_start(asc_dev_t *asc);
 void asc_cpu_stop(asc_dev_t *asc);
 bool asc_cpu_running(asc_dev_t *asc);
+u32 asc_cpu_control(asc_dev_t *asc);
+u32 asc_cpu_status(asc_dev_t *asc);
+bool asc_cpu_idle_stopped(asc_dev_t *asc);
+void asc_mbox_controls(asc_dev_t *asc, u32 *a2i, u32 *i2a);
+void asc_mbox_enable_i2a(asc_dev_t *asc);
 /* Inherited display coprocessor states accepted for a handoff. */
 enum asc_inherited_state {
     ASC_INHERITED_RUNNING, /* started and not stopped */

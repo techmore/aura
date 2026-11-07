@@ -6,17 +6,24 @@
 #include "string.h"
 #include "utils.h"
 
+#define APPLE_SART_MAX_ENTRIES 16
+
 struct sart_dev {
     uintptr_t base;
+    u32 version;
     u32 protected_entries;
     /* This is probably a bitfield but the exact meaning of each bit is unknown. */
     u32 flags_allow;
 
+    /* Every entry as sart_save() read it, for sart_replay() after a power cycle. */
+    bool saved_valid;
+    u8 saved_flags[APPLE_SART_MAX_ENTRIES];
+    u64 saved_paddr[APPLE_SART_MAX_ENTRIES];
+    size_t saved_size[APPLE_SART_MAX_ENTRIES];
+
     void (*get_entry)(sart_dev_t *sart, int index, u8 *flags, void **paddr, size_t *size);
     bool (*set_entry)(sart_dev_t *sart, int index, u8 flags, void *paddr, size_t size);
 };
-
-#define APPLE_SART_MAX_ENTRIES 16
 
 /* SARTv0 registers */
 #define APPLE_SART0_CONFIG(idx)       (0x00 + 4 * (idx))
@@ -223,6 +230,7 @@ sart_dev_t *sart_init(const char *adt_path)
         return NULL;
 
     sart->base = base;
+    sart->version = *sart_version;
 
     switch (*sart_version) {
         case 0:
@@ -340,4 +348,61 @@ bool sart_remove_allowed_region(sart_dev_t *sart, void *paddr, size_t sz)
 
     printf("sart: could not find entry to be removed\n");
     return false;
+}
+
+COLD_TEXT void sart_save(sart_dev_t *sart)
+{
+    for (unsigned int i = 0; i < APPLE_SART_MAX_ENTRIES; i++) {
+        void *paddr;
+
+        sart->get_entry(sart, i, &sart->saved_flags[i], &paddr, &sart->saved_size[i]);
+        sart->saved_paddr[i] = (u64)paddr;
+    }
+    sart->saved_valid = true;
+}
+
+/*
+ * Write back what sart_save() found in use, config first, then address, then size, as macOS does
+ * before a run bit. Returns how many entries didn't read back, or -1 with nothing saved.
+ */
+COLD_TEXT int sart_replay(sart_dev_t *sart, int *written)
+{
+    int bad = 0, n = 0;
+
+    *written = 0;
+    if (!sart->saved_valid)
+        return -1;
+
+    for (unsigned int i = 0; i < APPLE_SART_MAX_ENTRIES; i++) {
+        u8 flags = sart->saved_flags[i];
+        u64 paddr = sart->saved_paddr[i];
+        size_t size = sart->saved_size[i];
+        void *now_paddr;
+        size_t now_size;
+        u8 now_flags;
+
+        if (!flags && !size)
+            continue;
+        if (sart->version == 3) {
+            write32(sart->base + APPLE_SART3_CONFIG(i), flags);
+            write32(sart->base + APPLE_SART3_PADDR(i), paddr >> APPLE_SART3_PADDR_SHIFT);
+            write32(sart->base + APPLE_SART3_SIZE(i), size >> APPLE_SART3_SIZE_SHIFT);
+        } else if (sart->version == 4) {
+            write32(sart->base + APPLE_SART4_CONFIG(i), flags);
+            write32(sart->base + APPLE_SART4_PADDR(i), paddr >> APPLE_SART4_PADDR_SHIFT);
+            write32(sart->base + APPLE_SART4_SIZE(i), size >> APPLE_SART4_SIZE_SHIFT);
+        } else if (!sart->set_entry(sart, i, flags, (void *)paddr, size)) {
+            bad++;
+            continue;
+        }
+        n++;
+        sart->get_entry(sart, i, &now_flags, &now_paddr, &now_size);
+        if (now_flags == flags && (u64)now_paddr == paddr && now_size == size)
+            continue;
+        bad++;
+        printf("sart: replay: entry %u reads 0x%x 0x%lx+0x%zx, wrote 0x%x 0x%lx+0x%zx\n", i,
+               now_flags, (u64)now_paddr, now_size, flags, paddr, size);
+    }
+    *written = n;
+    return bad;
 }

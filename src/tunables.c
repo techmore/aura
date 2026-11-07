@@ -130,6 +130,47 @@ int tunables_apply_local_addr(const char *path, const char *prop, uintptr_t base
     return 0;
 }
 
+/* As tunables_apply_local_addr(), but writing only the records whose value changes. */
+COLD_TEXT int tunables_apply_local_changed(const char *path, const char *prop, uintptr_t base,
+                                           u32 *writes)
+{
+    struct tunable_info info;
+
+    *writes = 0;
+    if (tunables_adt_find(path, prop, &info, sizeof(struct tunable_local)) < 0)
+        return -1;
+
+    const struct tunable_local *tunables = (const struct tunable_local *)info.tunable_raw;
+    for (u32 i = 0; i < info.tunable_len; ++i) {
+        const struct tunable_local *tunable = &tunables[i];
+        u64 addr = base + tunable->offset;
+        u64 old, val;
+
+        switch (tunable->size) {
+            case 4:
+                old = read32(addr);
+                break;
+            case 8:
+                old = read64(addr);
+                break;
+            default:
+                printf("tunable: unsupported changed-only size 0x%08x\n", tunable->size);
+                return -1;
+        }
+        val = (old & ~tunable->mask) | (tunable->value & tunable->mask);
+        if (tunable->size == 4)
+            val &= 0xffffffff;
+        if (val == old)
+            continue;
+        if (tunable->size == 4)
+            write32(addr, val);
+        else
+            write64(addr, val);
+        (*writes)++;
+    }
+    return 0;
+}
+
 int tunables_validate_compact(const char *path, const char *prop, u64 span)
 {
     struct tunable_info info;

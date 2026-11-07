@@ -84,6 +84,7 @@
 enum rtkit_power_state {
     RTKIT_POWER_OFF = 0x00,
     RTKIT_POWER_SLEEP = 0x01,
+    RTKIT_POWER_IDLE = 0x201,
     RTKIT_POWER_QUIESCED = 0x10,
     RTKIT_POWER_ON = 0x20,
     RTKIT_POWER_INIT = 0x220,
@@ -116,6 +117,9 @@ struct rtkit_dev {
     bool crashed;
     /* The last boot attempt got no HELLO after the wakeup. */
     bool no_hello;
+    /* The firmware keeps buffers an earlier owner gave it: a crash log request is a crash. */
+    bool inherited;
+    u32 iop_acks;
 };
 
 struct syslog_log {
@@ -467,6 +471,10 @@ static void rtkit_crashed(rtkit_dev_t *rtk)
 
     rtkit_printf("IOP crashed!\n");
 
+    /* An inherited session's crash log is in a buffer its earlier owner gave. */
+    if (!hdr)
+        return;
+
     if (hdr->type != 'CLHE') {
         rtkit_printf("bad crashlog header 0x%x @ %p\n", hdr->type, hdr);
         return;
@@ -524,6 +532,7 @@ int rtkit_recv(rtkit_dev_t *rtk, struct rtkit_message *msg)
                 switch (msgtype) {
                     case MGMT_MSG_IOP_PWR_STATE_ACK:
                         rtk->iop_power = FIELD_GET(MGMT_PWR_STATE, msg->msg);
+                        rtk->iop_acks++;
                         break;
                     case MGMT_MSG_AP_PWR_STATE_ACK:
                         rtk->ap_power = FIELD_GET(MGMT_PWR_STATE, msg->msg);
@@ -562,7 +571,7 @@ int rtkit_recv(rtkit_dev_t *rtk, struct rtkit_message *msg)
             case RTKIT_EP_CRASHLOG:
                 switch (msgtype) {
                     case MSG_BUFFER_REQUEST:
-                        if (!rtk->crashlog_bfr.bfr) {
+                        if (!rtk->crashlog_bfr.bfr && !rtk->inherited) {
                             ok = ok && rtkit_handle_buffer_request(rtk, msg, &rtk->crashlog_bfr);
                         } else {
                             rtkit_crashed(rtk);
@@ -810,6 +819,193 @@ static bool rtkit_boot_internal(rtkit_dev_t *rtk, u32 timeout_usec)
         !rtkit_wait_for_power(rtk, &rtk->ap_power, RTKIT_POWER_ON, timeout_usec, "AP"))
         return false;
 
+    return true;
+}
+
+/* The firmware runs a session an earlier owner set up, with that owner's buffers. */
+COLD_TEXT void rtkit_set_inherited(rtkit_dev_t *rtk)
+{
+    rtk->inherited = true;
+}
+
+COLD_TEXT static bool rtkit_send_power(rtkit_dev_t *rtk, u32 type, enum rtkit_power_state state)
+{
+    struct asc_message msg;
+
+    msg.msg0 = FIELD_PREP(MGMT_TYPE, type) | FIELD_PREP(MGMT_PWR_STATE, state);
+    msg.msg1 = RTKIT_EP_MGMT;
+    return asc_send(rtk->asc, &msg);
+}
+
+/* Answer what the IOP sends until @state reads @target, for at most @usec. */
+COLD_TEXT static bool rtkit_poll_power(rtkit_dev_t *rtk, enum rtkit_power_state *state,
+                                       enum rtkit_power_state target, u32 usec)
+{
+    u64 timeout = timeout_calculate(usec);
+
+    while (*state != target) {
+        struct rtkit_message msg;
+        int ret = rtkit_recv(rtk, &msg);
+
+        if (ret < 0)
+            return false;
+        if (ret > 0)
+            rtkit_printf("dropping message to endpoint 0x%02x: %lx\n", msg.ep, msg.msg);
+        if (timeout_expired(timeout))
+            return false;
+    }
+    return true;
+}
+
+/*
+ * Idle a running IOP, keeping its state: what's waiting answered, AP power IDLE, IOP power IDLE,
+ * then its CPU stopped and idle. Only a power cycle and rtkit_boot_warm() bring it back.
+ */
+COLD_TEXT bool rtkit_idle(rtkit_dev_t *rtk, u64 *usec)
+{
+    struct rtkit_message msg;
+    u64 start = get_ticks();
+    int ret;
+
+    *usec = 0;
+    if (rtk->crashed)
+        return false;
+    while ((ret = rtkit_recv(rtk, &msg)) > 0)
+        rtkit_printf("dropping message to endpoint 0x%02x before idle: %lx\n", msg.ep, msg.msg);
+    if (ret < 0)
+        return false;
+
+    rtk->ap_power = RTKIT_POWER_OFF;
+    if (!rtkit_send_power(rtk, MGMT_MSG_AP_PWR_STATE, RTKIT_POWER_IDLE) ||
+        !rtkit_poll_power(rtk, &rtk->ap_power, RTKIT_POWER_IDLE, 200000)) {
+        printf("rtkit(%s): AP power IDLE not acknowledged: AP 0x%x\n", rtk->name, rtk->ap_power);
+        return false;
+    }
+    rtk->iop_power = RTKIT_POWER_OFF;
+    if (!rtkit_send_power(rtk, MGMT_MSG_IOP_PWR_STATE, RTKIT_POWER_IDLE) ||
+        !rtkit_poll_power(rtk, &rtk->iop_power, RTKIT_POWER_IDLE, 200000)) {
+        printf("rtkit(%s): IOP power IDLE not acknowledged: IOP 0x%x\n", rtk->name, rtk->iop_power);
+        return false;
+    }
+
+    u64 timeout = timeout_calculate(5000);
+    while (!asc_cpu_idle_stopped(rtk->asc)) {
+        if (timeout_expired(timeout)) {
+            printf("rtkit(%s): idle acknowledged, but CPU status 0x%x\n", rtk->name,
+                   asc_cpu_status(rtk->asc));
+            return false;
+        }
+    }
+    *usec = ticks_to_usecs(get_ticks() - start);
+    return true;
+}
+
+/*
+ * After a power cycle under a kept session, the caller having set the run bit: the firmware says
+ * HELLO by itself and keeps its buffers. The endpoint map is echoed with none started, bit 1 added
+ * to all but the last part and the last masked by @epmap_last_mask. It then acknowledges IOP power
+ * unasked, and AP power goes on. @start is the run bit's time, for the step lines.
+ */
+COLD_TEXT bool rtkit_boot_warm(rtkit_dev_t *rtk, u32 epmap_last_mask, u64 start)
+{
+    struct asc_message msg;
+    u32 msgtype;
+
+    rtk->crashed = false;
+    rtk->no_hello = false;
+    rtk->iop_power = RTKIT_POWER_OFF;
+    rtk->ap_power = RTKIT_POWER_OFF;
+    rtk->iop_acks = 0;
+
+    u64 hello_timeout = timeout_calculate(2 * USEC_PER_SEC);
+    for (;;) {
+        if (timeout_expired(hello_timeout)) {
+            printf("rtkit(%s): no HELLO %lu ms after the run bit\n", rtk->name,
+                   ticks_to_msecs(get_ticks() - start));
+            rtk->no_hello = true;
+            return false;
+        }
+        if (!asc_recv(rtk->asc, &msg))
+            continue;
+        msgtype = FIELD_GET(MGMT_TYPE, msg.msg0);
+        if (msg.msg1 == RTKIT_EP_MGMT && msgtype == MGMT_MSG_HELLO)
+            break;
+        printf("rtkit(%s): dropping endpoint 0x%x message %lx before HELLO\n", rtk->name, msg.msg1,
+               msg.msg0);
+    }
+
+    u32 min_ver = FIELD_GET(MGMT_MSG_HELLO_MINVER, msg.msg0);
+    u32 max_ver = FIELD_GET(MGMT_MSG_HELLO_MAXVER, msg.msg0);
+    u32 want_ver = min(RTKIT_MAX_VERSION, max_ver);
+    if (min_ver > RTKIT_MAX_VERSION || max_ver < RTKIT_MIN_VERSION) {
+        printf("rtkit(%s): HELLO versions [%d,%d] outside [%d,%d]\n", rtk->name, min_ver, max_ver,
+               RTKIT_MIN_VERSION, RTKIT_MAX_VERSION);
+        return false;
+    }
+    printf("rtkit(%s): HELLO %lu ms after the run bit, version %d\n", rtk->name,
+           ticks_to_msecs(get_ticks() - start), want_ver);
+
+    msg.msg0 = FIELD_PREP(MGMT_TYPE, MGMT_MSG_HELLO_ACK);
+    msg.msg0 |= FIELD_PREP(MGMT_MSG_HELLO_MINVER, want_ver);
+    msg.msg0 |= FIELD_PREP(MGMT_MSG_HELLO_MAXVER, want_ver);
+    msg.msg1 = RTKIT_EP_MGMT;
+    if (!asc_send(rtk->asc, &msg))
+        return false;
+
+    for (bool last = false; !last;) {
+        if (!asc_recv_timeout(rtk->asc, &msg, USEC_PER_SEC)) {
+            printf("rtkit(%s): no endpoint map after HELLO\n", rtk->name);
+            return false;
+        }
+        msgtype = FIELD_GET(MGMT_TYPE, msg.msg0);
+        if (msg.msg1 != RTKIT_EP_MGMT || msgtype != MGMT_MSG_EPMAP) {
+            printf("rtkit(%s): expected the endpoint map, got endpoint 0x%x message %lx\n",
+                   rtk->name, msg.msg1, msg.msg0);
+            return false;
+        }
+
+        u32 bitmap = FIELD_GET(MGMT_MSG_EPMAP_BITMAP, msg.msg0);
+        u32 base = FIELD_GET(MGMT_MSG_EPMAP_BASE, msg.msg0);
+        last = msg.msg0 & MGMT_MSG_EPMAP_DONE;
+        printf("rtkit(%s): endpoint map base %u bitmap 0x%x%s\n", rtk->name, base, bitmap,
+               last ? ", last" : "");
+
+        msg.msg0 = FIELD_PREP(MGMT_TYPE, MGMT_MSG_EPMAP_REPLY);
+        msg.msg0 |= FIELD_PREP(MGMT_MSG_EPMAP_BASE, base);
+        if (last)
+            msg.msg0 |= MGMT_MSG_EPMAP_REPLY_DONE | (bitmap & epmap_last_mask);
+        else
+            msg.msg0 |= MGMT_MSG_EPMAP_REPLY_MORE | bitmap | BIT(1);
+        msg.msg1 = RTKIT_EP_MGMT;
+        if (!asc_send(rtk->asc, &msg))
+            return false;
+    }
+
+    /* The firmware acknowledges IOP power by itself once the map is answered. */
+    u64 timeout = timeout_calculate(2 * USEC_PER_SEC);
+    while (!rtk->iop_acks) {
+        struct rtkit_message rmsg;
+        int ret = rtkit_recv(rtk, &rmsg);
+
+        if (ret < 0)
+            return false;
+        if (ret > 0)
+            rtkit_printf("dropping message to endpoint 0x%02x before IOP power: %lx\n", rmsg.ep,
+                         rmsg.msg);
+        if (timeout_expired(timeout)) {
+            printf("rtkit(%s): no IOP power acknowledgement %lu ms after the run bit\n", rtk->name,
+                   ticks_to_msecs(get_ticks() - start));
+            return false;
+        }
+    }
+    printf("rtkit(%s): IOP power 0x%x %lu ms after the run bit\n", rtk->name, rtk->iop_power,
+           ticks_to_msecs(get_ticks() - start));
+
+    if (!rtkit_send_power(rtk, MGMT_MSG_AP_PWR_STATE, RTKIT_POWER_ON) ||
+        !rtkit_poll_power(rtk, &rtk->ap_power, RTKIT_POWER_ON, USEC_PER_SEC)) {
+        printf("rtkit(%s): AP power on not acknowledged: AP 0x%x\n", rtk->name, rtk->ap_power);
+        return false;
+    }
     return true;
 }
 

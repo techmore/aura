@@ -26,6 +26,9 @@
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 
+/* Rarely run code, kept in the spare room of .init's page so that .text doesn't grow. */
+#define COLD_TEXT __attribute__((section(".init.cold")))
+
 #define USEC_PER_SEC 1000000L
 
 static inline u64 read64(u64 addr)

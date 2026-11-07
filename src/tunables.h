@@ -37,6 +37,9 @@ int tunables_apply_local(const char *path, const char *prop, u32 reg_idx);
  */
 int tunables_apply_local_addr(const char *path, const char *prop, uintptr_t base);
 
+/* Only records whose value changes are written, in table order. Counts the writes. */
+int tunables_apply_local_changed(const char *path, const char *prop, uintptr_t base, u32 *writes);
+
 /* Validate local ADT records against a register window before any MMIO writes.
  * Returns 1 if the property is absent, 0 if valid, and -1 if malformed. */
 int tunables_validate_local(const char *path, const char *prop, u64 span);

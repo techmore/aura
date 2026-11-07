@@ -14,5 +14,7 @@ bool sart_add_allowed_region(sart_dev_t *sart, void *paddr, size_t sz);
 bool sart_get_allowed(sart_dev_t *sart, int index, u64 *paddr, size_t *sz);
 void sart_release(sart_dev_t *sart);
 bool sart_remove_allowed_region(sart_dev_t *sart, void *paddr, size_t sz);
+void sart_save(sart_dev_t *sart);
+int sart_replay(sart_dev_t *sart, int *written);
 
 #endif

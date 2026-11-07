@@ -158,6 +158,41 @@ bool asc_cpu_running(asc_dev_t *asc)
     return read32(asc->cpu_base + ASC_CPU_CONTROL) & ASC_CPU_CONTROL_START;
 }
 
+COLD_TEXT u32 asc_cpu_control(asc_dev_t *asc)
+{
+    return read32(asc->cpu_base + ASC_CPU_CONTROL);
+}
+
+COLD_TEXT u32 asc_cpu_status(asc_dev_t *asc)
+{
+    return read32(asc->cpu_base + ASC_CPU_STATUS);
+}
+
+/* Stopped in its idle loop, as an IOP that acknowledged an idle request reads. */
+COLD_TEXT bool asc_cpu_idle_stopped(asc_dev_t *asc)
+{
+    u32 status = asc_cpu_status(asc);
+
+    return (status & ASC_CPU_STATUS_STOPPED) && (status & ASC_CPU_STATUS_IDLE);
+}
+
+COLD_TEXT void asc_mbox_controls(asc_dev_t *asc, u32 *a2i, u32 *i2a)
+{
+    if (asc->postoffice) {
+        *a2i = *i2a = read32(asc->base + ASC_V8_MBOX_STATUS);
+        return;
+    }
+    *a2i = read32(asc->base + ASC_MBOX_A2I_CONTROL);
+    *i2a = read32(asc->base + ASC_MBOX_I2A_CONTROL);
+}
+
+/* The IOP can't post to its outbox until the AP sets this bit, which a power cycle may clear. */
+COLD_TEXT void asc_mbox_enable_i2a(asc_dev_t *asc)
+{
+    if (!asc->postoffice)
+        set32(asc->base + ASC_MBOX_I2A_CONTROL, ASC_MBOX_CONTROL_ENABLE);
+}
+
 static bool asc_mailbox_empty(u32 control)
 {
     return (control & (ASC_MBOX_CONTROL_ENABLE | ASC_MBOX_CONTROL_EMPTY)) ==

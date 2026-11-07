@@ -702,6 +702,20 @@ int pmgr_power_on(int die, const char *name)
     return pmgr_set_mode(addr, PMGR_PS_ACTIVE);
 }
 
+/* The power state register of the named device, 0 if there is none. Read only. */
+COLD_TEXT uintptr_t pmgr_device_psreg(int die, const char *name)
+{
+    if (!pmgr_initialized || die < 0 || die >= pmgr_dies)
+        return 0;
+    for (size_t i = 0; i < pmgr_devices_len; i++) {
+        const struct pmgr_device *dev = &pmgr_devices[i];
+        if (strncmp(dev->name, name, sizeof(dev->name)) || (dev->flags & PMGR_FLAG_VIRTUAL))
+            continue;
+        return pmgr_device_get_addr(die, dev);
+    }
+    return 0;
+}
+
 int pmgr_power_is_on(int die, const char *name)
 {
     if (die < 0 || die >= pmgr_dies)
