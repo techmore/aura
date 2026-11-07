@@ -1,0 +1,148 @@
+// SPDX-License-Identifier: MIT
+/*
+ * The J773g (M4 Mac mini) main-DCP display group as a loader-owned tree, for
+ * tests/j773g_display_host.c. Node names, compatibles, registers, streams and kernel
+ * properties are those of the U1 test tree (t8132-j773g-u1-front-usb2-v65.dtb) that drove HDMI
+ * from the main DCP; what the loader publishes is left out: no reserved firmware memory, no
+ * memory-region, no firmware identity, no dcp/disp0/disp0_piodma alias, and every node of the
+ * group disabled.
+ */
+
+/dts-v1/;
+
+/ {
+	compatible = "apple,j773g", "apple,t8132", "apple,arm-platform";
+	#address-cells = <2>;
+	#size-cells = <2>;
+	model = "Apple Mac mini (M4, 2024)";
+
+	clk_disp0: clock-disp0-v53 {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <300000000>;
+		clock-output-names = "disp0-v53";
+	};
+
+	aliases {
+		serial0 = "/soc/serial@3ad200000";
+	};
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		stdout-path = "serial0";
+
+		framebuffer@0 {
+			compatible = "apple,simple-framebuffer", "simple-framebuffer";
+			reg = <0 0 0 0>;
+			status = "disabled";
+		};
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* Placeholders reserve nothing. */
+		uat-ttbs {
+			reg = <0 0 0 0>;
+			no-map;
+			status = "disabled";
+		};
+	};
+
+	memory@10000000000 {
+		device_type = "memory";
+		reg = <0x100 0x0 0x4 0x0>;
+	};
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		nonposted-mmio;
+
+		serial@3ad200000 {
+			compatible = "apple,s5l-uart";
+			reg = <0x3 0xad200000 0x0 0x4000>;
+		};
+
+		smc_gpio: gpio {
+			compatible = "apple,smc-gpio";
+			gpio-controller;
+			#gpio-cells = <2>;
+		};
+
+		display: display-subsystem {
+			compatible = "apple,display-subsystem";
+			iommus = <&disp0_dart 0>;
+			dma-noncoherent;
+			status = "disabled";
+		};
+
+		dcp: dcp@30ae00000 {
+			compatible = "apple,t8132-dcp", "apple,dcp";
+			reg = <0x3 0x0ae00000 0x0 0x4000>,
+			      <0x3 0x08000000 0x0 0xc20000>,
+			      <0x3 0x0a240000 0x0 0x10000>,
+			      <0x3 0x0a3a8000 0x0 0x4000>,
+			      <0x3 0x0a800000 0x0 0x800000>;
+			reg-names = "coproc", "disp-0", "disp-1", "disp-2", "disp-3";
+			mboxes = <&dcp_mbox>;
+			mbox-names = "mbox";
+			iommus = <&dcp_dart 23>;
+			clocks = <&clk_disp0>;
+			phys = <&dptx_phy>;
+			phy-names = "dp-phy";
+			apple,connector-type = "HDMI-A";
+			hdmi-pwren-gpios = <&smc_gpio 15 0>;
+			dp2hdmi-pwren-gpios = <&smc_gpio 26 0>;
+			aurora,j773g-hdmi-test;
+			#address-cells = <2>;
+			#size-cells = <2>;
+			dma-noncoherent;
+			status = "disabled";
+
+			disp0_piodma: piodma {
+				iommus = <&disp0_dart 16>;
+				dma-noncoherent;
+				status = "disabled";
+			};
+		};
+
+		dptx_phy: phy@39a700000 {
+			compatible = "apple,t8122-dptx-phy", "apple,dptx-phy";
+			reg = <0x3 0x9a700000 0x0 0x4000>, <0x3 0x9a740000 0x0 0x10000>;
+			reg-names = "core", "dptx";
+			#phy-cells = <0>;
+			#reset-cells = <0>;
+			status = "disabled";
+		};
+
+		disp0_dart: iommu@30a300000 {
+			compatible = "apple,t8132-dart", "apple,t8110-dart";
+			reg = <0x3 0x0a300000 0x0 0xc000>;
+			#iommu-cells = <1>;
+			apple,dma-range = <0x100 0x0 0x10 0x0>;
+			status = "disabled";
+		};
+
+		dcp_dart: iommu@30a340000 {
+			compatible = "apple,t8132-dart", "apple,t8110-dart";
+			reg = <0x3 0x0a340000 0x0 0x20000>;
+			#iommu-cells = <1>;
+			apple,dma-range = <0x100 0x0 0x10 0x0>;
+			status = "disabled";
+		};
+
+		dcp_mbox: mailbox@30ae08000 {
+			compatible = "apple,t8132-asc-mailbox", "apple,asc-mailbox-v4";
+			reg = <0x3 0x0ae08000 0x0 0x4000>;
+			#mbox-cells = <0>;
+			status = "disabled";
+		};
+	};
+};
