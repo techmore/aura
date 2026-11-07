@@ -9081,6 +9081,64 @@ static int dt_set_j713_isp_one(unsigned int unused)
     return 0;
 }
 
+/* Whether a node other than skip names the IOMMU phandle in its iommus list. */
+static bool dt_iommu_shared(u32 phandle, int skip)
+{
+    int node;
+
+    for (node = fdt_next_node(dt, -1, NULL); node >= 0; node = fdt_next_node(dt, node, NULL)) {
+        int len;
+        const fdt32_t *iommus = node == skip ? NULL : fdt_getprop(dt, node, "iommus", &len);
+
+        for (int i = 0; iommus && i + 1 < len / (int)sizeof(*iommus); i += 2)
+            if (fdt32_ld(&iommus[i]) == phandle)
+                return true;
+    }
+    return false;
+}
+
+/*
+ * A T8132 Mac without a camera (the J773g) has no isp or isp0 in its ADT. A tree that enables
+ * the ISP there would have the OS probe a camera and power domains that do not exist: disable
+ * the ISP and the DARTs that only it uses. A tree that leaves it disabled is not changed.
+ */
+static int dt_disable_t8132_absent_isp(void)
+{
+    if (chip_id != T8132 || adt_path_offset(adt, "/arm-io/isp") >= 0 ||
+        adt_path_offset(adt, "/arm-io/isp0") >= 0)
+        return 0;
+
+    int isp = -1;
+    while ((isp = fdt_node_offset_by_compatible(dt, isp, "apple,t8132-isp")) >= 0) {
+        const char *status = fdt_getprop(dt, isp, "status", NULL);
+        if (status && !strcmp(status, "disabled"))
+            continue;
+
+        /* One cell of stream ID per DART, as in t8132.dtsi. Decide before any write. */
+        u32 darts[8];
+        bool own[8];
+        int len, count = 0;
+        const fdt32_t *iommus = fdt_getprop(dt, isp, "iommus", &len);
+        int cells = iommus && len > 0 && !(len % sizeof(*iommus)) ? len / sizeof(*iommus) : 0;
+        if (!(cells % 2) && cells / 2 <= (int)ARRAY_SIZE(darts))
+            for (; count < cells / 2; count++) {
+                darts[count] = fdt32_ld(&iommus[2 * count]);
+                own[count] = !dt_iommu_shared(darts[count], isp);
+            }
+
+        if (fdt_setprop_string(dt, isp, "status", "disabled"))
+            bail("FDT: cannot disable the T8132 ISP\n");
+        for (int i = 0; i < count; i++) {
+            int dart = own[i] ? fdt_node_offset_by_phandle(dt, darts[i]) : -1;
+            if (dart >= 0 && fdt_setprop_string(dt, dart, "status", "disabled"))
+                bail("FDT: cannot disable a T8132 ISP DART\n");
+        }
+        printf("FDT: no ISP in the ADT; T8132 ISP disabled with the DARTs only it uses\n");
+        isp = -1; /* Offsets moved; start over. Disabled nodes are skipped. */
+    }
+    return 0;
+}
+
 /*
  * Only a disabled ISP with the placeholders is a handoff target. A tree without them (no camera,
  * or a kernel that reserves the firmware itself and enables the ISP) is left as it is. A refused
@@ -10380,6 +10438,8 @@ int kboot_prepare_dt(void *fdt)
     if (dt_set_aop_firmware())
         return -1;
     if (dt_set_isp())
+        return -1;
+    if (dt_disable_t8132_absent_isp())
         return -1;
     dt_set_j713_isp();
     if (dt_set_pmgr())
