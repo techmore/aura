@@ -112,8 +112,11 @@ static int fdt_stringlist_search(const void *dt,int id,const char *key,const cha
  (void)dt;(void)id;int n=find(value);if(n<4)return -1;
  return ((!strcmp(key,"linux-enablement-mac,dapf-handoff")?requested:power_requested)&(1U<<(n-4)))?0:-1;
 }
+static const char *fdt_board = "apple,j713";
 static int fdt_node_check_compatible(const void *dt,int node,const char *compat)
-{(void)dt;(void)node;(void)compat;return 0;}
+{(void)dt;(void)node;return strcmp(compat,fdt_board);}
+static bool live_j773g;
+static bool kboot_is_j773g(const void *dt){(void)dt;return live_j773g;}
 '''
 
 TESTS = r'''
@@ -121,12 +124,15 @@ static void reset(void) {
  memcpy(nodes,original,sizeof(nodes));chip_id=T8132;requested=7;power_requested=4;
  consumer_enables=dart_enables=disables=filter_writes=dart_gate_queries=instance_reads=0;
  handoff=true;consumer_active=enable_error=dart_gates=false;
+ fdt_board="apple,j713";live_j773g=false;
 }
+/* The J773g: its own 26.6.2 dart-pmp and PMP records in place of the J713's. */
+static void j773g(void) {reset();fdt_board="apple,j773g";live_j773g=true;nodes[2]=j773g_pmp;}
 static void preserved(void) {assert(!dart_enables&&!disables&&!filter_writes&&!dart_gate_queries);}
 static void rejected(void) {assert(dapf_init("/arm-io/dart-pmp",1)<0);preserved();}
 int main(void) {
  /* Actual PMP metadata has no DAPF. Retain its independent consumer power. */
- reset();assert(dapf_init_j713((void *)1)==1);
+ reset();assert(dapf_init_t8132_board((void *)1)==1);
  assert(consumer_enables==1&&consumer_active&&instance_reads==1);preserved();
  reset();assert(!dapf_init("/arm-io/dart-pmp",1));preserved();
  assert(dapf_init("/arm-io/dart-pmp",0)<0);preserved();
@@ -171,19 +177,44 @@ int main(void) {
  assert(!dapf_init("/arm-io/dart-pmp",0));preserved();
  assert(dapf_init("/arm-io/dart-pmp",1)<0);preserved();
  /* Actual J713 caller return count/error semantics, including failed power. */
- reset();enable_error=true;assert(dapf_init_j713((void *)1)<0);
+ reset();enable_error=true;assert(dapf_init_t8132_board((void *)1)<0);
  assert(consumer_enables==1&&!consumer_active&&!instance_reads);preserved();
- reset();power_requested=0;assert(!dapf_init_j713((void *)1));
+ reset();power_requested=0;assert(!dapf_init_t8132_board((void *)1));
  assert(!consumer_enables&&!instance_reads);preserved();
- reset();power_requested=0;consumer_active=true;assert(dapf_init_j713((void *)1)==1);
+ reset();power_requested=0;consumer_active=true;assert(dapf_init_t8132_board((void *)1)==1);
  assert(!consumer_enables&&instance_reads==1);preserved();
- reset();nodes[2].instance_len=31;assert(dapf_init_j713((void *)1)<0);
+ reset();nodes[2].instance_len=31;assert(dapf_init_t8132_board((void *)1)<0);
  assert(consumer_enables==1&&consumer_active);preserved();
  reset();memcpy(scratch,nodes[2].instance,32);scratch[1].type=DAPF_INSTANCE_DAPF;
- nodes[2].instance=(const u8 *)scratch;assert(dapf_init_j713((void *)1)<0);
+ nodes[2].instance=(const u8 *)scratch;assert(dapf_init_t8132_board((void *)1)<0);
  assert(consumer_enables==1&&consumer_active);preserved();
- reset();handoff=false;nodes[2].instance_len=31;assert(!dapf_init_j713((void *)1));
+ reset();handoff=false;nodes[2].instance_len=31;assert(!dapf_init_t8132_board((void *)1));
  assert(!consumer_enables&&!instance_reads);preserved();
+ /* Board admission: the J713 as before; the live J773g only with the J713's exact dart-pmp
+  * records, reg and PMP clock gates; any other T8132 board, or any mismatch, powers nothing. */
+ reset();assert(dapf_init_fdt((void *)1)==1&&consumer_enables==1&&consumer_active);preserved();
+ j773g();assert(dapf_init_fdt((void *)1)==1&&consumer_enables==1&&consumer_active);preserved();
+ j773g();live_j773g=false;assert(!dapf_init_fdt((void *)1)&&!consumer_enables&&!instance_reads);
+ reset();fdt_board="apple,j604";assert(!dapf_init_fdt((void *)1)&&!consumer_enables);
+ static u8 inst[32];
+ static u32 gates[3];
+ for(int c=0;c<9;c++) {
+  j773g();memcpy(inst,nodes[2].instance,32);memcpy(gates,nodes[2].gates,8);
+  nodes[2].instance=inst;nodes[2].gates=gates;
+  switch(c) {
+  case 0: inst[20]^=1;break;                        /* another GAPF instance */
+  case 1: nodes[2].instance_len=16;break;            /* DART record only */
+  case 2: memcpy(inst+16,"FPAD\0\0\0\0DAPF",12);break; /* a DAPF bank */
+  case 3: nodes[2].base[0]+=0x4000;break;
+  case 4: nodes[2].size[1]=0x8000;break;
+  case 5: nodes[2].nregs=3;nodes[2].base[2]=0x380400000;nodes[2].size[2]=0x4000;break;
+  case 6: gates[1]=0x80;break;
+  case 7: nodes[2].ngates=1;break;
+  case 8: gates[2]=0x80;nodes[2].ngates=3;break;
+  }
+  assert(!dapf_init_fdt((void *)1));
+  assert(!consumer_enables&&!consumer_active);preserved();
+ }
  /* The central T8132 branch is the only change to the legacy flow. */
  reset();chip_id=0x8110;dart_gates=true;assert(!dapf_init("/arm-io/dart-aop",1));
  assert(filter_writes==5*(nodes[0].config_len/52)&&dart_enables==1&&disables==1);
@@ -212,6 +243,18 @@ def test_j713_instance_and_power_flow(tmp_path):
         entries.append(f'{{"{node["name"]}",inst{i},cfg{i},sizeof(inst{i}),sizeof(cfg{i}),'
                        f'gates{i},{len(gates)},{{{bases}}},{{{sizes}}},{len(node["reg"])}}}')
     inputs = "\n".join(declarations) + '\nstatic const struct node original[3]={' + ",".join(entries) + '};\n'
+    # The J773g's own dart-pmp and PMP clock gates (26.6.2 ADT).
+    j773g = next(n for n in json.loads((repo / "tests/data/j773g-dapf-instance.json").read_text())
+                 ["nodes"] if n["name"] == "pmp")
+    raw = bytes.fromhex(j773g["consumer_clock_gate_hex"])
+    gates = [int.from_bytes(raw[j:j+4], "little") for j in range(0, len(raw), 4)]
+    inputs += (f'static const u8 j773g_inst[] = {{{",".join(map(str, bytes.fromhex(j773g["instance_hex"])))}}};\n'
+               f'static const u8 j773g_cfg[] = {{{",".join(map(str, bytes.fromhex(j773g["filter_hex"])))}}};\n'
+               f'static const u32 j773g_gates[] = {{{",".join(map(str, gates))}}};\n'
+               'static const struct node j773g_pmp={"pmp",j773g_inst,j773g_cfg,sizeof(j773g_inst),'
+               f'sizeof(j773g_cfg),j773g_gates,{len(gates)},'
+               f'{{{",".join(r["base"] for r in j773g["reg"])}}},'
+               f'{{{",".join(r["size"] for r in j773g["reg"])}}},{len(j773g["reg"])}}};\n')
     window = block((repo / "src/dapf.h").read_text(), "struct dapf_window {") + ";\n"
     harness = PREFIX + window + pmgr + "\n" + production + inputs + TESTS
     cfile, binary = tmp_path / "dapf-instance.c", tmp_path / "dapf-instance"
@@ -235,6 +278,9 @@ def test_j713_instance_and_power_flow(tmp_path):
         ("consumer power", 'if (pmgr_adt_power_enable(entry->consumer) < 0)', 'if (false)'),
         ("caller count", 'count += 1;', 'count += 0;'),
         ("inactive consumer", 'if (powered <= 0)', 'if (powered <= 0 && false)'),
+        ("J773g records", 'memcmp(instance, j713_pmp_instance, sizeof(j713_pmp_instance))', 'false'),
+        ("J773g gates", 'gates[0] != 0x7e || gates[1] != 0x7f', 'false'),
+        ("J773g live board", 'if (!kboot_is_j773g(fdt))', 'if (!(kboot_is_j773g(fdt) || true))'),
     ]
     for title, old, new in controls:
         bad = harness.replace(old, new, 1)

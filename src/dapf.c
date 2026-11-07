@@ -3,6 +3,7 @@
 #include "dapf.h"
 #include "adt.h"
 #include "assert.h"
+#include "kboot.h"
 #include "malloc.h"
 #include "memory.h"
 #include "pmgr.h"
@@ -513,7 +514,40 @@ struct entry dapf_entries[] = {
     {"/arm-io/dart-isp", 5, "isp"}, {"/arm-io/dart-isp0", 5, "isp"}, {NULL, -1, NULL},
 };
 
-static int dapf_init_j713(void *dt)
+/*
+ * The J713's dart-pmp: a DART and a GAPF (PS_PROT), no DAPF bank, at 0x380300000 (0xc000) and
+ * 0x38079c000 (0x4000), and a PMP with clock gates 0x7e and 0x7f. The J773g's 26.6.2 ADT has
+ * exactly these. Returns why the J773g's differ, or NULL.
+ */
+static const char *dapf_j773g_pmp_mismatch(void)
+{
+    static const u8 j713_pmp_instance[] = {
+        'T', 'R', 'A', 'D', 0, 0, 0, 0, 'D', 'A', 'R', 'T', 0,   0,   0,   0,
+        'F', 'P', 'A', 'G', 0, 0, 0, 0, 'P', 'S', '_', 'P', 'R', 'O', 'T', 0,
+    };
+    static const u64 bases[] = {0x380300000, 0x38079c000}, sizes[] = {0xc000, 0x4000};
+    int dart_path[8];
+    u64 base, size;
+    u32 len;
+
+    int dart = adt_path_offset_trace(adt, "/arm-io/dart-pmp", dart_path);
+    const u8 *instance = dart < 0 ? NULL : adt_getprop(adt, dart, "instance", &len);
+    if (!instance || len != sizeof(j713_pmp_instance) ||
+        memcmp(instance, j713_pmp_instance, sizeof(j713_pmp_instance)))
+        return "instance records are not the J713's";
+    for (int i = 0; i < 3; i++) {
+        int ret = adt_get_reg(adt, dart_path, "reg", i, &base, &size);
+        if (i < 2 ? ret < 0 || base != bases[i] || size != sizes[i] : ret >= 0)
+            return "registers are not the J713's";
+    }
+    int pmp = adt_path_offset(adt, "/arm-io/pmp");
+    const u32 *gates = pmp < 0 ? NULL : adt_getprop(adt, pmp, "clock-gates", &len);
+    if (!gates || len != 2 * sizeof(*gates) || gates[0] != 0x7e || gates[1] != 0x7f)
+        return "PMP clock gates are not the J713's";
+    return NULL;
+}
+
+static int dapf_init_t8132_board(void *dt)
 {
     int ret = 0;
     int count = 0;
@@ -532,7 +566,7 @@ static int dapf_init_j713(void *dt)
         chosen >= 0 && fdt_getprop(dt, chosen, "linux-enablement-mac,dapf-handoff", NULL);
 
     if (!described) {
-        printf("dapf: No J713 consumer handoff requested; preserving firmware state\n");
+        printf("dapf: No T8132 consumer handoff requested; preserving firmware state\n");
         return 0;
     }
 
@@ -593,9 +627,20 @@ int dapf_init_fdt(const void *fdt)
     j614s_aop_ready = false;
     j614s_isp_ready = false;
     if (chip_id == T8132) {
-        if (!fdt || fdt_node_check_compatible(fdt, 0, "apple,j713"))
-            return 0; /* No other M4 board's power/DAPF contract is qualified. */
-        return dapf_init_j713((void *)fdt);
+        if (!fdt)
+            return 0;
+        if (!fdt_node_check_compatible(fdt, 0, "apple,j713"))
+            return dapf_init_t8132_board((void *)fdt);
+        /* No other M4 board's power/DAPF contract is qualified but the J773g's, and that one
+         * only while its PMP and dart-pmp are the J713's. */
+        if (!kboot_is_j773g(fdt))
+            return 0;
+        const char *why = dapf_j773g_pmp_mismatch();
+        if (why) {
+            printf("dapf: J773g dart-pmp %s; preserving firmware state\n", why);
+            return 0;
+        }
+        return dapf_init_t8132_board((void *)fdt);
     }
 
     int ret = 0;
