@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: GPL-2.0-only OR MIT
-"""Exercise production T8132 handoff against both J713 calibration bundles."""
+"""Exercise production T8132 handoff against the J713 and J773g calibration bundles."""
 import json
 from pathlib import Path
 import subprocess
 
+import pytest
 
-def test_j713_atc_usb3_bundle_and_atomic_rejection(tmp_path):
+
+# The J773g fixture (26.6.2 ADT, all four ports) has its expected lists from a model of the
+# copy written apart from this code; the same model reproduces the J713 fixture's.
+@pytest.mark.parametrize("board", ["j713", "j773g"])
+def test_j713_atc_usb3_bundle_and_atomic_rejection(tmp_path, board):
     repo = Path(__file__).resolve().parents[2]
     source = (repo / "src/kboot_atc.c").read_text()
     definitions = source[source.index("struct atc_tunable {"):source.index("struct atc_fuse_info {")]
@@ -15,7 +20,7 @@ def test_j713_atc_usb3_bundle_and_atomic_rejection(tmp_path):
     append = source[start:source.index("\n}", start) + 2] + "\n"
     copy = source[source.index("static void dt_copy_t8132_usb3_tunables("):
                   source.index("static void dt_copy_atc_tunables(")]
-    fixture = json.loads((repo / "tests/data/j713-atc-usb3.json").read_text())
+    fixture = json.loads((repo / f"tests/data/{board}-atc-usb3.json").read_text())
     for port, entry in enumerate(fixture["ports"]):
         declarations, properties, checks, usb_checks = [], [], [], []
         for i, (name, raw) in enumerate(entry["properties"].items()):
@@ -168,8 +173,8 @@ int main(void)
     return 0;
 }
 '''
-        cfile = tmp_path / f"j713-atc-{port}.c"
-        binary = tmp_path / f"j713-atc-{port}"
+        cfile = tmp_path / f"{board}-atc-{port}.c"
+        binary = tmp_path / f"{board}-atc-{port}"
         cfile.write_text(harness)
         # Link the in-tree libfdt rather than a host-installed one.
         libfdt = repo / "src/libfdt"
