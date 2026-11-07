@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only OR MIT */
 
 #include "pcie.h"
+#include "adt.h"
 #include "dart.h"
+#include "malloc.h"
 #include "smc.h"
 #include "utils.h"
 
@@ -277,6 +279,96 @@ int pcie_handoff_fdt(void *dt)
  * No native PCIe device driver may adopt a partially prepared rail/link/DART.
  * ANS storage is independent. Never change another board's topology here.
  */
+/* The ADT's local tunable format. */
+struct pcie_adt_tunable {
+    u32 offset;
+    u32 size;
+    u64 mask;
+    u64 value;
+} PACKED;
+
+/*
+ * T8140: what a later stage needs to bring the shared APCIe PHY back after it cycles the power
+ * of ANS and APCIe, which only the ADT has. Each table is <offset mask value> records relative
+ * to its /arm-io/apcie window, the DT PCIe node's "axi2af", "phy-block" and "phy-ip".
+ */
+static const struct {
+    const char *adt;
+    const char *fdt;
+    int reg;
+} pcie_t8140_tables[] = {
+    {"apcie-axi2af-tunables", "apple,tunable-axi2af", 4},
+    {"apcie-phy-tunables", "apple,tunable-phy", 2},
+    {"apcie-phy-ip-pll-tunables", "apple,tunable-phy-ip-pll", 3},
+    {"apcie-phy-ip-auspma-tunables", "apple,tunable-phy-ip-auspma", 3},
+};
+
+/* One table, whole or not at all. */
+static int pcie_t8140_table_fdt(void *dt, int node, int adt_node, int *path, size_t i)
+{
+    const struct pcie_adt_tunable *t;
+    u64 base, size;
+    u32 len;
+
+    t = adt_getprop(adt, adt_node, pcie_t8140_tables[i].adt, &len);
+    if (!t || !len || len % sizeof(*t) ||
+        adt_get_reg(adt, path, "reg", pcie_t8140_tables[i].reg, &base, &size) < 0 || size < 4) {
+        printf("FDT: %s missing or malformed\n", pcie_t8140_tables[i].adt);
+        return -1;
+    }
+
+    u32 n = len / sizeof(*t);
+    fdt32_t *cells = malloc(n * 3 * sizeof(*cells));
+    if (!cells)
+        return -1;
+    for (u32 j = 0; j < n; j++) {
+        if (t[j].size != 4 || t[j].offset % 4 || t[j].offset > size - 4 || t[j].mask >> 32 ||
+            t[j].value >> 32) {
+            printf("FDT: %s record %u unsupported\n", pcie_t8140_tables[i].adt, j);
+            free(cells);
+            return -1;
+        }
+        cells[3 * j] = cpu_to_fdt32(t[j].offset);
+        cells[3 * j + 1] = cpu_to_fdt32(t[j].mask);
+        cells[3 * j + 2] = cpu_to_fdt32(t[j].value);
+    }
+
+    int ret = fdt_setprop(dt, node, pcie_t8140_tables[i].fdt, cells, n * 3 * sizeof(*cells));
+    free(cells);
+    if (ret < 0) {
+        printf("FDT: couldn't add %s: %s\n", pcie_t8140_tables[i].fdt, fdt_strerror(ret));
+        return -1;
+    }
+    return n;
+}
+
+int pcie_t8140_tables_fdt(void *dt)
+{
+    int path[8];
+    int adt_node = adt_path_offset_trace(adt, "/arm-io/apcie", path);
+    int node = fdt_node_offset_by_compatible(dt, -1, "apple,t8140-pcie");
+    int records = 0;
+
+    if (adt_node < 0 || node < 0) {
+        printf("FDT: no T8140 PCIe node for the APCIe tables\n");
+        return -1;
+    }
+
+    /* Properties added to the node leave its own offset as it is. */
+    for (size_t i = 0; i < ARRAY_SIZE(pcie_t8140_tables); i++) {
+        int n = pcie_t8140_table_fdt(dt, node, adt_node, path, i);
+        if (n < 0) {
+            for (size_t j = 0; j < i; j++)
+                fdt_delprop(dt, node, pcie_t8140_tables[j].fdt);
+            return -1;
+        }
+        records += n;
+    }
+
+    printf("FDT: T8140 APCIe tables published, %d records\n", records);
+    return 0;
+}
+
 int pcie_disable_j713_fdt(void *dt)
 {
     int host = -1;

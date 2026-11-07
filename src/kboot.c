@@ -9442,6 +9442,9 @@ int kboot_boot(void *kernel)
                 return -1;
         } else {
             printf("kboot: T8140 APCIe initialized; retaining PCIe consumers\n");
+            /* A later stage that restarts ANS needs them to bring the PHY back. */
+            if (pcie_t8140_tables_fdt(dt))
+                printf("kboot: APCIe tables not published; later stages keep the ANS session\n");
         }
         if (fdt_pack(dt))
             bail("FDT: fdt_pack() failed\n");
