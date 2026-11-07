@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
-"""The M4 Pro and A18 Pro ANE preload handoff: reservations, memory regions and firmware IOVAs.
+"""The M4, M4 Pro and A18 Pro ANE preload handoff: reservations, memory regions and firmware IOVAs.
 
 Runs kboot.c's dt_set_ane_firmware(), dt_set_ane_node(), dt_ane_fill_region() and
 dt_get_or_add_reserved_mem() as they are, on real FDTs built with aura's libfdt, against a
-fake ADT. Segment values are the J616s 26.6.2 /arm-io/ane0 and the Neo (J700) 26.6.2
-/arm-io/ane segment-ranges.
+fake ADT. Segment values are the J616s 26.6.2 /arm-io/ane0, the Neo (J700) 26.6.2
+/arm-io/ane and the Mac mini (J773g, M4) 26.6.2 /arm-io/ane segment-ranges.
 """
 
 from pathlib import Path
@@ -20,6 +20,8 @@ BOARDS = {
                   text=0x100009D8000, data=0x1000196C000),
     "j700": dict(compat="apple,t8140-ane", node="ane@400000000", adt="/arm-io/ane",
                  text=0x10000768000, data=0x100019A0000),
+    "j773g": dict(compat="apple,t8132-ane", node="ane@500000000", adt="/arm-io/ane",
+                  text=0x10000AB8000, data=0x10000D78000),
 }
 
 
