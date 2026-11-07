@@ -34,6 +34,11 @@
 # for external displays. Needs a kernel that adopts them
 #chosen.asahi,j713-dcpext=1
 
+# M4 Mac mini (J773g): HDMI from the main display coprocessor. "handoff" publishes its
+# firmware memory and inherited DART mappings for a kernel that drives it; aura never touches
+# the DCP. "start" needs a build made with J773G_DISPLAY_START=1. Default: off
+#chosen.aura,j773g-display=handoff
+
 # Add an arbitrary property to /chosen in the device tree
 #chosen.foo=bar
 

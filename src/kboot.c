@@ -24,6 +24,7 @@
 #include "kboot_atc.h"
 #include "kboot_audio.h"
 #include "kboot_display_facts.h"
+#include "kboot_display_j773g.h"
 #include "kboot_gpu_t8122.h"
 #include "kboot_pmp_t8122.h"
 #include "kboot_t6031.h"
@@ -6720,6 +6721,17 @@ static int dt_set_j713_dcp_handoff(void)
     return 0;
 }
 
+/* 1 when the J773g main-DCP handoff owns the display; see kboot_display_j773g.c. */
+static int dt_set_j773g_display(void)
+{
+    struct j773g_display_env env = {0};
+
+    kboot_loaded_file_part(&env.loader_base, &env.loader_size);
+    if (!ctxr_exec_window(&env.exec_base, &env.exec_size))
+        env.exec_base = env.exec_size = 0;
+    return kboot_j773g_display(dt, &env);
+}
+
 static int dt_set_display(void)
 {
     if (chip_id == T8140)
@@ -6745,6 +6757,9 @@ static int dt_set_display(void)
         disp0_piodma_alias = compat_piodma_alias;
 
     if (chip_id == T8132) {
+        /* J773g with chosen.aura,j773g-display set; otherwise the FDT is left untouched. */
+        if (dt_set_j773g_display())
+            return 0;
         if (dt_set_j713_dcp_handoff())
             printf("FDT: J713 DCP handoff refused; keeping the boot framebuffer\n");
         else
@@ -9154,6 +9169,20 @@ int kboot_prepare_dt(void *fdt)
 
     if (dt_reserve_secondary_ro())
         return -1;
+
+#ifdef J773G_DISPLAY_START
+    /*
+     * J773g, chosen.aura,j773g-display=start: the loader's own DCP session lights HDMI before
+     * the FDT is prepared, so that dt_set_fb() publishes the scanout. It never powers, resets or
+     * tears anything down; the display handoff later reserves what the DCP uses and keeps it
+     * from Linux.
+     */
+    if (chip_id == T8132) {
+        const char *mode = kboot_chosen_param(J773G_DISPLAY_KNOB);
+        if (j773g_display_mode_parse(mode) == J773G_MODE_START && !j773g_start_state.ran)
+            j773g_display_start();
+    }
+#endif
 
     if (chip_id == T8132) {
         if (dt_reserve_bootloader_handoff())

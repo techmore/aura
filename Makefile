@@ -109,6 +109,13 @@ endif
 CFG += ESP_STAGE2
 endif
 
+# J773g (M4 Mac mini) only: build the loader-side HDMI start (src/display_j773g.c) that
+# chosen.aura,j773g-display=start selects. Without it that knob only logs that this build
+# cannot start the DCP; =handoff works in every build.
+ifeq ($(J773G_DISPLAY_START),1)
+CFG += J773G_DISPLAY_START
+endif
+
 # Development builds only: a boot started by a VDM `reboot debugusb` with a host reading the
 # DockChannel console opens the same 15 s proxy window as an aura-proxy request.
 ifeq ($(DEBUGUSB_PROXY),1)
@@ -195,7 +202,8 @@ OBJECTS := \
 	j873.o \
 	kboot.o kboot_atc.o kboot_audio.o kboot_gpu_t8122.o kboot_gpu_t8122_power.o kboot_pmp_t8122.o \
 	kboot_t6020_compat.o \
-	kboot_display_handoff.o kboot_display_facts.o kboot_gpu26.o kboot_gpu_t6031.o kboot_t6031.o \
+	kboot_display_handoff.o kboot_display_facts.o kboot_display_j773g.o \
+	kboot_gpu26.o kboot_gpu_t6031.o kboot_t6031.o \
 	main.o boot_options.o \
 	mitigations.o \
 	mcc.o \
@@ -231,6 +239,10 @@ OBJECTS := \
 	$(DCP_OBJECTS) \
 	$(HV_OBJECTS) \
 	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS)
+
+ifeq ($(J773G_DISPLAY_START),1)
+OBJECTS += display_j773g.o
+endif
 
 FP_OBJECTS := \
 	kboot_gpu.o kboot_gpu_t8152.o kboot_gpu_m4.o \

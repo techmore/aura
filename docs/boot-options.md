@@ -121,3 +121,32 @@ Physical register and firmware handoff differences remain runtime driver logic.
 
 Cross-platform hardware qualification is required before replacing installed
 boot objects; host tests and successful links do not establish that qualification.
+
+## HDMI on the M4 Mac mini (J773g)
+
+The Mac mini's HDMI port is driven by the main display coprocessor (`/arm-io/dcp`),
+through the T8122 DPTX PHY and a DP-to-HDMI converter. iBoot leaves that DCP
+running under automatic power management with its two display DARTs locked, and
+only an invisible 640x1136 framebuffer. By default aura keeps exactly that.
+
+`chosen.aura,j773g-display` selects:
+
+- `off` (or absent): nothing changes; the device tree is byte-for-byte what it
+  would be without the option.
+- `handoff`: after checking the board (J773g, board-id 42), the 26.6.2 OS
+  firmware, the DCP firmware UUID and its six segments, the DART register
+  windows, and every mapping of both locked DARTs (read only), kboot reserves
+  the six firmware segments (`__OS_LOG` by physical address) and `/vram`,
+  publishes the firmware identity and the inherited mappings, enables the
+  main-DCP nodes, adds the `dcp`, `disp0` and `disp0_piodma` aliases, and marks
+  the DCP `aurora,j773g-dcp-firmware-ready`. All of it or nothing: any failed
+  check leaves the tree as with `off` and logs `FDT: J773g display: handoff
+  refused (<why>)`. aura never writes the DCP, its PHY, its power state or the
+  SMC; the kernel wakes the DCP iBoot left running.
+- `start`: aura lights HDMI itself. Only a build made with
+  `make J773G_DISPLAY_START=1` has this code; any other build logs
+  `FDT: j773g-display=start requested but this build cannot start the DCP` and
+  behaves as `off`.
+
+On a J773g aura never powers, gates or resets the DCP's CPU domain (`DISP_CPU`):
+a write there faults.
