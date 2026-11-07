@@ -125,8 +125,8 @@ def test_t8132_branch_runs_the_hook_first_and_the_stock_path_unchanged():
         /* J773g with chosen.aura,j773g-display set; otherwise the FDT is left untouched. */
         if (dt_set_j773g_display())
             return 0;
-        if (dt_set_j713_dcp_handoff())
-            printf("FDT: J713 DCP handoff refused; keeping the boot framebuffer\\n");
+        if (dt_set_m4_dcp_handoff())
+            printf("FDT: M4 DCP handoff refused; keeping the boot framebuffer\\n");
         else
             dt_reserve_j713_dcpext();
         return 0;
