@@ -9057,6 +9057,20 @@ int kboot_prepare_dt(void *fdt)
     if (dt_reserve_secondary_ro())
         return -1;
 
+#ifdef J773G_DISPLAY_START
+    /*
+     * J773g, chosen.aura,j773g-display=start: the loader's own DCP session lights HDMI before
+     * the FDT is prepared, so that dt_set_fb() publishes the scanout. It never powers, resets or
+     * tears anything down; the display handoff later reserves what the DCP uses and keeps it
+     * from Linux.
+     */
+    if (chip_id == T8132) {
+        const char *mode = kboot_chosen_param(J773G_DISPLAY_KNOB);
+        if (j773g_display_mode_parse(mode) == J773G_MODE_START && !j773g_start_state.ran)
+            j773g_display_start();
+    }
+#endif
+
     if (chip_id == T8132) {
         if (dt_reserve_bootloader_handoff())
             return -1;
