@@ -32,6 +32,9 @@ int dt_set_gpu_t8122_26(void *dt);
 int kboot_prepare_dt(void *fdt);
 int kboot_boot(void *kernel);
 
+/* True only when the live J773g on 26.6.2 boots an OS tree that describes it. */
+bool kboot_is_j773g(const void *fdt);
+
 /* Boot-args RAM range and boot framebuffer base, for the kboot_* SoC helpers */
 u64 kboot_ram_base(void);
 u64 kboot_ram_size(void);
