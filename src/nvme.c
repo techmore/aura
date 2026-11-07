@@ -3,6 +3,7 @@
 #include "../build/build_cfg.h"
 
 #include "adt.h"
+#include "ans_power.h"
 #include "assert.h"
 #include "malloc.h"
 #include "nvme.h"
@@ -143,6 +144,8 @@ static bool nvme_initialized = false;
 static bool nvme_secure_regs;
 static bool nvme_reboot_required;
 bool nvme_adopt_live_session = false;
+/* Once per stage: a second nvme_init() adopts what the restart left running. */
+static bool nvme_restart_done;
 /* aura only reads the drive; only a proxy-issued flush means the drive has data to settle. */
 static bool nvme_wrote;
 bool nvme_keep_running_for_linux = false;
@@ -399,6 +402,236 @@ static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, u6
     return true;
 }
 
+/* The controller and NVMMU set up for the linear submission queue, with one I/O queue pair. */
+static bool nvme_setup_controller(void)
+{
+    struct nvme_command cmd;
+
+    if (!nvme_lsq_in_nvmmu)
+        set32(nvme_lsq_ctrl(), NVME_LINEAR_SQ_CTRL_EN);
+    write32(nvme_qreg(NVME_MAX_PEND_CMDS_CTRL),
+            ((NVME_QUEUE_SIZE - 1) << 16) | (NVME_QUEUE_SIZE - 1));
+    write32(nvmmu_base + NVMMU_NUM, NVME_QUEUE_SIZE - 1);
+    write64_lo_hi(nvmmu_base + NVMMU_ASQ_BASE, (u64)adminq.tcbs);
+    write64_lo_hi(nvmmu_base + NVMMU_IOSQ_BASE, (u64)ioq.tcbs);
+
+    /* setup admin queue */
+    if (!nvme_ctrl_disable()) {
+        printf("nvme: timeout while waiting for CSTS.RDY to clear\n");
+        return false;
+    }
+    write64_lo_hi(nvme_qreg(NVME_ASQ), (u64)adminq.cmds);
+    write64_lo_hi(nvme_qreg(NVME_ACQ), (u64)adminq.cqes);
+    write32(nvme_qreg(NVME_AQA), ((NVME_QUEUE_SIZE - 1) << 16) | (NVME_QUEUE_SIZE - 1));
+    if (!nvme_ctrl_enable()) {
+        printf("nvme: timeout while waiting for CSTS.RDY to be set\n");
+        goto out_disable_ctrl;
+    }
+
+    /* setup IO queue */
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_ADMIN_CMD_CREATE_CQ;
+    cmd.prp1 = (u64)ioq.cqes;
+    cmd.cdw10 = 1; // cq id
+    cmd.cdw10 |= (NVME_QUEUE_SIZE - 1) << 16;
+    cmd.cdw11 = NVME_QUEUE_CONTIGUOUS;
+    if (!nvme_exec_command(&adminq, &cmd, NULL)) {
+        printf("nvme: create cq command failed\n");
+        goto out_disable_ctrl;
+    }
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_ADMIN_CMD_CREATE_SQ;
+    cmd.prp1 = (u64)ioq.cmds;
+    cmd.cdw10 = 1; // sq id
+    cmd.cdw10 |= (NVME_QUEUE_SIZE - 1) << 16;
+    cmd.cdw11 = NVME_QUEUE_CONTIGUOUS;
+    cmd.cdw11 |= 1 << 16; // cq id for this sq
+    if (!nvme_exec_command(&adminq, &cmd, NULL)) {
+        printf("nvme: create sq command failed\n");
+        goto out_delete_cq;
+    }
+
+    if (nvme_type == NVME_T8132) {
+        // Extra write required to set up the IO queues on M4+.
+        // Otherwise, the ANS crashes and the crashlog says
+        // `I/O SQ  : 0x000000000` / `I/O CQ  : 0x000000000`.
+        write64_lo_hi(nvme_qreg(NVME_IOQ_CQES), (u64)ioq.cqes);
+        write64_lo_hi(nvme_qreg(NVME_IOQ_CMDS), (u64)ioq.cmds);
+    }
+    return true;
+
+out_delete_cq:
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_ADMIN_CMD_DELETE_CQ;
+    cmd.cdw10 = 1; // cq id
+    if (!nvme_exec_command(&adminq, &cmd, NULL))
+        printf("nvme: delete cq command failed\n");
+out_disable_ctrl:
+    nvme_ctrl_shutdown();
+    nvme_ctrl_disable();
+    nvme_poll_syslog();
+    return false;
+}
+
+enum {
+    NVME_RESTART_OK,      /* ANS stopped, power-cycled and running again */
+    NVME_RESTART_SKIPPED, /* nothing touched; the live session goes on */
+    NVME_RESTART_KEPT,    /* given up before ANS's idle; the live session goes on */
+    NVME_RESTART_DEAD,    /* ANS is down until a reboot */
+};
+
+/* The shutdown macOS asks for before a sleep. */
+#define NVME_CC_SHN_SLEEP    3
+#define NVME_RESTART_HOLD_MS 100
+#define NVME_IORVBAR_T8140   0x389050000UL
+/* macOS's reply to the last part of ANS's endpoint map after a wake */
+#define NVME_EPMAP_LAST_MASK BIT(0)
+#define ASC_MBOX_I2A_RESET   0x20001
+
+COLD_TEXT static void nvme_reset_queue(struct nvme_queue *q)
+{
+    memset(q->tcbs, 0, NVME_QUEUE_SIZE * sizeof(*q->tcbs));
+    memset(q->cmds, 0, NVME_QUEUE_SIZE * sizeof(*q->cmds));
+    memset(q->cqes, 0, NVME_QUEUE_SIZE * sizeof(*q->cqes));
+    q->cq_head = 0;
+    q->cq_phase = 1;
+    q->failed = false;
+}
+
+COLD_TEXT static int nvme_restart_dead(const char *step, u64 start)
+{
+    printf("nvme: restart: FAILED at %s after %lu ms; ANS is down until a reboot\n", step,
+           ticks_to_msecs(get_ticks() - start));
+    return NVME_RESTART_DEAD;
+}
+
+COLD_TEXT static int nvme_restart_skip(const char *why)
+{
+    printf("nvme: restart: %s; ANS untouched, keeping the live session\n", why);
+    return NVME_RESTART_SKIPPED;
+}
+
+/*
+ * T8140: an earlier stage's session isn't adopted as it runs. From a controller just set up on it:
+ * the controller shut down as for a sleep, ANS idled and its run bit cleared, its power cycled,
+ * IORVBAR and SART put back, the run bit, RTKit's start after a power cycle, the controller again.
+ */
+COLD_TEXT static int nvme_restart(void)
+{
+    u64 start = get_ticks();
+    u64 iorvbar, iorvbar_size, saved, before, after, t, usec;
+    u32 a2i, i2a, i2a_on;
+    int path[8];
+
+    printf("nvme: restart: stopping the adopted ANS and starting it again\n");
+
+    if (ans_power_prepare())
+        return nvme_restart_skip("APCIe and ANS not as expected");
+    if (adt_path_offset_trace(adt, "/arm-io/ans", path) < 0 ||
+        adt_get_reg(adt, path, "reg", 1, &iorvbar, &iorvbar_size) < 0 ||
+        iorvbar != NVME_IORVBAR_T8140 || iorvbar_size < sizeof(u64))
+        return nvme_restart_skip("no IORVBAR");
+    /* An adopted session has neither yet. */
+    if (!nvme_sart && !(nvme_sart = sart_init("/arm-io/sart-ans")))
+        return nvme_restart_skip("no SART");
+    if (!nvme_rtkit) {
+        nvme_rtkit = rtkit_init("nvme", nvme_asc, NULL, NULL, nvme_sart, false);
+        if (!nvme_rtkit)
+            return nvme_restart_skip("no RTKit");
+        rtkit_set_inherited(nvme_rtkit);
+    }
+
+    t = get_ticks();
+    mask32(nvme_base + NVME_CC, NVME_CC_SHN, FIELD_PREP(NVME_CC_SHN, NVME_CC_SHN_SLEEP));
+    u64 timeout = timeout_calculate(NVME_SHUTDOWN_TIMEOUT);
+    while (FIELD_GET(NVME_CSTS_SHST, read32(nvme_base + NVME_CSTS)) != NVME_CSTS_SHST_DONE &&
+           !timeout_expired(timeout))
+        nvme_poll_syslog();
+    u32 csts = read32(nvme_base + NVME_CSTS);
+    bool shut = FIELD_GET(NVME_CSTS_SHST, csts) == NVME_CSTS_SHST_DONE;
+    printf("nvme: restart: controller shutdown: %s in %lu ms, CC 0x%x CSTS 0x%x\n",
+           shut ? "done" : "TIMED OUT", ticks_to_msecs(get_ticks() - t),
+           read32(nvme_base + NVME_CC), csts);
+    if (!shut) {
+        nvme_reset_queue(&adminq);
+        nvme_reset_queue(&ioq);
+        if (!nvme_setup_controller())
+            return nvme_restart_dead("the controller's shutdown", start);
+        printf("nvme: restart: given up before the idle; controller up on the running session\n");
+        return NVME_RESTART_KEPT;
+    }
+
+    saved = read64(iorvbar);
+    bool idle = rtkit_idle(nvme_rtkit, &usec);
+    printf("nvme: restart: ANS idle: %s in %lu us, CPU control 0x%x status 0x%x\n",
+           idle ? "acknowledged" : "NOT acknowledged, going on to the power cycle", usec,
+           asc_cpu_control(nvme_asc), asc_cpu_status(nvme_asc));
+
+    /* Twice, each from what it reads back, as macOS does. */
+    asc_cpu_stop(nvme_asc);
+    asc_cpu_stop(nvme_asc);
+    asc_mbox_controls(nvme_asc, &a2i, &i2a);
+    sart_save(nvme_sart);
+    printf("nvme: restart: run bit off: CPU control 0x%x status 0x%x, mailbox A2I 0x%x I2A 0x%x, "
+           "IORVBAR 0x%lx, SART saved\n",
+           asc_cpu_control(nvme_asc), asc_cpu_status(nvme_asc), a2i, i2a, saved);
+
+    int not_gated = ans_power_down();
+    if (not_gated < 0)
+        return nvme_restart_dead("the power down", start);
+    if (not_gated)
+        printf("nvme: restart: power down: %d switch owner(s) NOT power-gated, going on\n",
+               not_gated);
+    else
+        printf("nvme: restart: power down: ANS and APCIE_SYS_ST power-gated\n");
+    mdelay(NVME_RESTART_HOLD_MS);
+
+    if (ans_power_up())
+        return nvme_restart_dead("the power up", start);
+    printf("nvme: restart: power up: APCIe and ANS back\n");
+
+    before = read64(iorvbar);
+    if (before != saved)
+        write64(iorvbar, saved);
+    after = read64(iorvbar);
+    printf("nvme: restart: IORVBAR before 0x%lx, saved 0x%lx, after 0x%lx\n", before, saved, after);
+
+    int written;
+    int bad = sart_replay(nvme_sart, &written);
+    printf("nvme: restart: SART: %d entries written back, %d didn't read back\n", written, bad);
+
+    /* The outbox at its reset value is the proof that ANS's CPU was reset. */
+    asc_mbox_controls(nvme_asc, &a2i, &i2a);
+    asc_mbox_enable_i2a(nvme_asc);
+    asc_mbox_controls(nvme_asc, &a2i, &i2a_on);
+    printf("nvme: restart: mailbox before the run bit: A2I 0x%x I2A 0x%x then 0x%x: CPU %s\n", a2i,
+           i2a, i2a_on, i2a_on == ASC_MBOX_I2A_RESET ? "reset" : "NOT reset");
+
+    u64 run = get_ticks();
+    asc_cpu_start(nvme_asc);
+    printf("nvme: restart: run bit on: CPU control 0x%x status 0x%x\n", asc_cpu_control(nvme_asc),
+           asc_cpu_status(nvme_asc));
+    if (!rtkit_boot_warm(nvme_rtkit, NVME_EPMAP_LAST_MASK, run))
+        return nvme_restart_dead("RTKit's start", start);
+    nvme_boot_ticks = run;
+    printf("nvme: restart: ANS on %lu ms after the run bit\n", ticks_to_msecs(get_ticks() - run));
+
+    if (poll32(nvme_base + NVME_BOOT_STATUS, 0xffffffff, NVME_BOOT_STATUS_OK, USEC_PER_SEC) < 0) {
+        printf("nvme: restart: BOOT_STATUS 0x%x\n", read32(nvme_base + NVME_BOOT_STATUS));
+        return nvme_restart_dead("ANS's boot status", start);
+    }
+
+    nvme_reset_queue(&adminq);
+    nvme_reset_queue(&ioq);
+    if (!nvme_setup_controller())
+        return nvme_restart_dead("the controller's setup", start);
+
+    printf("nvme: restart: done in %lu ms; ANS restarted and its controller is up\n",
+           ticks_to_msecs(get_ticks() - start));
+    return NVME_RESTART_OK;
+}
+
 bool nvme_init(void)
 {
     if (nvme_reboot_required) {
@@ -541,6 +774,16 @@ bool nvme_init(void)
          * Never replay RTKit's one-time handshake on the latter. */
         adopting = nvme_adopt_live_session || (chip_id == T8132 && running);
 #endif
+        /*
+         * An earlier aura stage's live session, with or without nvme.adopt. iBoot also leaves RUN
+         * and BOOT_STATUS set, but none of the queue setup an aura stage leaves.
+         */
+        if (chip_id == T8140 && running &&
+            read32(nvme_base + NVME_BOOT_STATUS) == NVME_BOOT_STATUS_OK &&
+            !(read32(nvme_base + NVME_CSTS) & NVME_CSTS_CFS) &&
+            (nvme_read64_lo_hi(nvmmu_base + NVMMU_ASQ_BASE) ||
+             read32(nvme_qreg(NVME_MAX_PEND_CMDS_CTRL))))
+            adopting = true;
         if (adopting) {
             u32 boot_status = read32(nvme_base + NVME_BOOT_STATUS);
             u32 csts = read32(nvme_base + NVME_CSTS);
@@ -573,76 +816,24 @@ bool nvme_init(void)
     }
 
 setup_controller:
-    /* setup controller and NVMMU for linear submission queue */
-    if (!nvme_lsq_in_nvmmu)
-        set32(nvme_lsq_ctrl(), NVME_LINEAR_SQ_CTRL_EN);
-    write32(nvme_qreg(NVME_MAX_PEND_CMDS_CTRL),
-            ((NVME_QUEUE_SIZE - 1) << 16) | (NVME_QUEUE_SIZE - 1));
-    write32(nvmmu_base + NVMMU_NUM, NVME_QUEUE_SIZE - 1);
-    write64_lo_hi(nvmmu_base + NVMMU_ASQ_BASE, (u64)adminq.tcbs);
-    write64_lo_hi(nvmmu_base + NVMMU_IOSQ_BASE, (u64)ioq.tcbs);
-
-    /* setup admin queue */
-    if (!nvme_ctrl_disable()) {
-        printf("nvme: timeout while waiting for CSTS.RDY to clear\n");
+    if (!nvme_setup_controller())
         goto out_shutdown;
-    }
-    write64_lo_hi(nvme_qreg(NVME_ASQ), (u64)adminq.cmds);
-    write64_lo_hi(nvme_qreg(NVME_ACQ), (u64)adminq.cqes);
-    write32(nvme_qreg(NVME_AQA), ((NVME_QUEUE_SIZE - 1) << 16) | (NVME_QUEUE_SIZE - 1));
-    if (!nvme_ctrl_enable()) {
-        printf("nvme: timeout while waiting for CSTS.RDY to be set\n");
-        goto out_disable_ctrl;
-    }
 
-    /* setup IO queue */
-    struct nvme_command cmd;
-
-    memset(&cmd, 0, sizeof(cmd));
-    cmd.opcode = NVME_ADMIN_CMD_CREATE_CQ;
-    cmd.prp1 = (u64)ioq.cqes;
-    cmd.cdw10 = 1; // cq id
-    cmd.cdw10 |= (NVME_QUEUE_SIZE - 1) << 16;
-    cmd.cdw11 = NVME_QUEUE_CONTIGUOUS;
-    if (!nvme_exec_command(&adminq, &cmd, NULL)) {
-        printf("nvme: create cq command failed\n");
-        goto out_disable_ctrl;
-    }
-
-    memset(&cmd, 0, sizeof(cmd));
-    cmd.opcode = NVME_ADMIN_CMD_CREATE_SQ;
-    cmd.prp1 = (u64)ioq.cmds;
-    cmd.cdw10 = 1; // sq id
-    cmd.cdw10 |= (NVME_QUEUE_SIZE - 1) << 16;
-    cmd.cdw11 = NVME_QUEUE_CONTIGUOUS;
-    cmd.cdw11 |= 1 << 16; // cq id for this sq
-    if (!nvme_exec_command(&adminq, &cmd, NULL)) {
-        printf("nvme: create sq command failed\n");
-        goto out_delete_cq;
-    }
-
-    if (nvme_type == NVME_T8132) {
-        // Extra write required to set up the IO queues on M4+.
-        // Otherwise, the ANS crashes and the crashlog says
-        // `I/O SQ  : 0x000000000` / `I/O CQ  : 0x000000000`.
-        write64_lo_hi(nvme_qreg(NVME_IOQ_CQES), (u64)ioq.cqes);
-        write64_lo_hi(nvme_qreg(NVME_IOQ_CMDS), (u64)ioq.cmds);
+    if (adopting && !nvme_restart_done && chip_id == T8140 && nvme_type == NVME_T8132 &&
+        !nvme_secure_regs) {
+        int restart = nvme_restart();
+        nvme_restart_done = restart == NVME_RESTART_OK;
+        if (restart == NVME_RESTART_DEAD) {
+            /* ANS and the queues may still own DMA, and ANS can't be brought back here. */
+            nvme_reboot_required = true;
+            return false;
+        }
     }
 
     nvme_initialized = true;
     printf("nvme: initialized at 0x%lx\n", nvme_base);
     return true;
 
-out_delete_cq:
-    memset(&cmd, 0, sizeof(cmd));
-    cmd.opcode = NVME_ADMIN_CMD_DELETE_CQ;
-    cmd.cdw10 = 1; // cq id
-    if (!nvme_exec_command(&adminq, &cmd, NULL))
-        printf("nvme: delete cq command failed\n");
-out_disable_ctrl:
-    nvme_ctrl_shutdown();
-    nvme_ctrl_disable();
-    nvme_poll_syslog();
 out_shutdown:
     if (adopting) {
         /* ANS may still reference the queues if controller shutdown failed. */

@@ -168,6 +168,7 @@ OBJECTS := \
 	adt.o \
 	afk.o \
 	aic.o \
+	ans_power.o \
 	asc.o \
 	$(BUILTIN_LOGO)_48.o $(BUILTIN_LOGO)_128.o $(BUILTIN_LOGO)_256.o \
 	chainload.o \

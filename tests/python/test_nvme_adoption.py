@@ -11,6 +11,9 @@ def test_adopted_queue_lifetime(tmp_path):
     declarations = source[source.index("#define NVME_TIMEOUT"):source.index("static u64 nvme_read64_lo_hi")]
     # The queue register helpers, which place the registers for the secure layout too.
     qregs = source[source.index("static u64 nvme_qreg(u32 reg)"):source.index("static void nvme_log_entry_state")]
+    # The controller setup, which nvme_init() runs, and the restart's results.
+    setup = source[source.index("/* The controller and NVMMU set up for the linear submission queue"):
+                   source.index("/* The shutdown macOS asks for before a sleep. */")]
     init = source[source.index("bool nvme_init(void)"):source.index("void nvme_ensure_shutdown(void)")]
     # The M1-M3 sleep-and-reset helper that every legacy power-down goes through.
     sleep_reset = source[source.index("static bool nvme_ans_sleep_and_reset(void)"):
@@ -115,6 +118,8 @@ static void write64_lo_hi(u64 addr, u64 value)
         cleared_ioq++;
 }
 static void nvme_log_entry_state(bool running) {}
+/* No earlier aura stage's queue setup: T8140 sessions are found as before. */
+static u64 nvme_read64_lo_hi(u64 addr) { return 0; }
 static sart_dev_t *sart_init(const char *path) { return &sart; }
 static void sart_free(sart_dev_t *s) {}
 static rtkit_dev_t *rtkit_init(const char *name, asc_dev_t *a, void *d, void *i,
@@ -145,7 +150,10 @@ static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, vo
     }
     return !((failure == 4 && commands == 1) || (failure == 5 && commands == 2));
 }
-''' + qregs + sleep_reset + init + shutdown + r'''
+''' + qregs + setup + r'''
+/* The T8140 restart needs the hardware: it leaves the adopted session as it was. */
+static int nvme_restart(void) { return NVME_RESTART_SKIPPED; }
+''' + sleep_reset + init + shutdown + r'''
 int main(int argc, char **argv)
 {
     assert(argc == 2);

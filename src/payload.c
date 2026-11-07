@@ -508,6 +508,11 @@ int payload_run(void)
             printf("Payload: cannot prepare the M4 ANS session\n");
             goto boot_failed;
         }
+        /* Before kboot_boot(): pcie_init() brings the radio's link up on the restarted APCIe. */
+        if (chip_id == T8140 && !boot_spec && !nvme_init()) {
+            printf("Payload: cannot prepare the T8140 ANS session\n");
+            goto boot_failed;
+        }
         cpufreq_init();
         if (smp_start_secondaries() && chip_id == T8140) {
             printf("SMP: refusing payload handoff with missing T8140 CPUs\n");
