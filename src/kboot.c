@@ -9328,11 +9328,11 @@ int kboot_prepare_dt(void *fdt)
     return 0;
 }
 
-static int dt_disable_j713_pcie(void)
+static int dt_disable_radio_pcie(void)
 {
     /* prepare_dt packed the tree. Restore its already reserved spare capacity
      * before adding status, then pack again for downstream source-size bounds. */
-    if (fdt_open_into(dt, dt, dt_bufsize) || pcie_disable_j713_fdt(dt) || fdt_pack(dt))
+    if (fdt_open_into(dt, dt, dt_bufsize) || pcie_disable_radio_fdt(dt) || fdt_pack(dt))
         return -1;
     return 0;
 }
@@ -9524,15 +9524,17 @@ int kboot_boot(void *kernel)
         usb_init();
     int described = chip_id == T8132 ? pcie_prepare_fdt(dt) : 0;
     bool j713 = chip_id == T8132 && !fdt_node_check_compatible(dt, 0, "apple,j713");
-    if (described < 0) {
-        if (!j713 || dt_disable_j713_pcie())
-            return -1;
+    bool j773g = chip_id == T8132 && kboot_is_j773g(dt);
+    if (described < 0 && (!(j713 || j773g) || dt_disable_radio_pcie()))
+        return -1;
+    if (described < 0 && j713) {
         /* Do not train an optional port whose rail could not be prepared. */
         ret = 0;
     } else {
+        /* The J773g's Ethernet shares the controller: train it with the radio port disabled. */
         ret = pcie_init();
-        if (chip_id == T8132 && ((ret && described) || pcie_handoff_fdt(dt) < 0)) {
-            if (!j713 || dt_disable_j713_pcie())
+        if (chip_id == T8132 && ((ret && described > 0) || pcie_handoff_fdt(dt) < 0)) {
+            if (!(j713 || j773g) || dt_disable_radio_pcie())
                 return -1;
         }
     }

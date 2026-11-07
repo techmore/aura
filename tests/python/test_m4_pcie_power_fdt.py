@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only OR MIT
-"""PCIe handoff keeps OS ownership and requires the native J713 gP13 action."""
+"""PCIe handoff keeps OS ownership and requires the native J713/J773g gP13 action."""
 from pathlib import Path
 import subprocess
 
@@ -30,11 +30,31 @@ static int smc_write_u32(smc_dev_t *s, u32 key, u32 value)
 static void smc_shutdown(smc_dev_t *s) {}
 static int dart_set_bypass_fdt(void *dt, u32 phandle, u8 sid)
 { assert(phandle == 2 && sid == expected_sid); bypasses++; return 0; }
+#define PACKED __attribute__((packed))
+/* The live J773g: kboot_is_j773g() and its ADT /amfm function-reg_on (26.6.2:
+ * 241:pKW4('gP13', 0x800000), stored as phandle, reversed FourCC, key, template). */
+static bool live_j773g;
+static void *adt;
+static unsigned char reg_on[20];
+static u32 reg_on_len;
+static void j773g_reg_on(void)
+{
+ static const unsigned char adt_bytes[] = {0xf1, 0, 0, 0, '4', 'W', 'K', 'p',
+                                           '3', '1', 'P', 'g', 0, 0, 0x80, 0};
+ memcpy(reg_on, adt_bytes, sizeof(adt_bytes)); reg_on_len = sizeof(adt_bytes);
+}
+static bool kboot_is_j773g(const void *dt) { return live_j773g; }
+static int adt_path_offset(const void *tree, const char *path) { return strcmp(path, "/amfm") ? -1 : 1; }
+static const void *adt_getprop(const void *tree, int node, const char *name, u32 *len)
+{
+ if (node != 1 || strcmp(name, "function-reg_on") || !reg_on_len) return NULL;
+ *len = reg_on_len; return reg_on;
+}
 ''' + production + r'''
-static void setup(void *dt, bool j713, int fault)
+static void setup_board(void *dt, const char *board, int fault)
 {
  assert(!fdt_create_empty_tree(dt, 8192));
- assert(!fdt_setprop_string(dt, 0, "compatible", j713 ? "apple,j713" : "apple,j715"));
+ assert(!fdt_setprop_string(dt, 0, "compatible", board));
  int gpio = fdt_add_subnode(dt, 0, "gpio");
  assert(gpio >= 0 && !fdt_setprop_string(dt, gpio, "compatible",
                                       fault == 2 ? "apple,smc-low-gpio" : "apple,smc-gpio"));
@@ -55,6 +75,58 @@ static void setup(void *dt, bool j713, int fault)
  int endpoint = fdt_add_subnode(dt, port, "wifi");
  fdt32_t reg[] = {cpu_to_fdt32(0x10000), 0, 0, 0, 0};
  assert(!fdt_setprop(dt, endpoint, "reg", reg, sizeof(reg)));
+ /* A second port without a described rail, like the desktops' Ethernet port 2. */
+ int other = fdt_add_subnode(dt, host, "port2");
+ assert(other >= 0);
+}
+static void setup(void *dt, bool j713, int fault)
+{
+ setup_board(dt, j713 ? "apple,j713" : "apple,j715", fault);
+}
+static const char *status_of(void *dt, const char *path)
+{
+ const char *status = fdt_getprop(dt, fdt_path_offset(dt, path), "status", NULL);
+ return status ? status : "okay";
+}
+/* J773g: the J713 rail and handoff on the live board with its ADT action. A failure
+ * disables only the radio's port; the controller and its Ethernet port stay. */
+static void test_j773g(void *dt)
+{
+ for (int fault = 0; fault < 5; fault++) {
+  setup_board(dt, "apple,j773g", fault); live_j773g = true; j773g_reg_on();
+  writes = bypasses = 0; expected_sid = 16;
+  assert(pcie_prepare_fdt(dt) == (fault ? -1 : 1));
+  assert(writes == !fault);
+  if (writes)
+   assert(last_key == 0x67503133 && last_value == 0x00800001U);
+  assert(pcie_handoff_fdt(dt) == 1 && bypasses == 1);
+  assert(!pcie_disable_radio_fdt(dt));
+  assert(!strcmp(status_of(dt, "/pcie/port"), "disabled"));
+  assert(!strcmp(status_of(dt, "/pcie"), "okay") && !strcmp(status_of(dt, "/pcie/port2"), "okay"));
+  writes = bypasses = 0;
+  assert(!pcie_prepare_fdt(dt) && !pcie_handoff_fdt(dt) && !writes && !bypasses);
+ }
+ /* A J773g tree on a machine that is not the live J773g on 26.6.2: left alone. */
+ setup_board(dt, "apple,j773g", 0); live_j773g = false; j773g_reg_on();
+ writes = bypasses = 0;
+ assert(!pcie_prepare_fdt(dt) && !pcie_handoff_fdt(dt) && !writes && !bypasses);
+ assert(pcie_disable_radio_fdt(dt) < 0 && !strcmp(status_of(dt, "/pcie/port"), "okay"));
+ /* Any other ADT action: no SMC write, no bypass, and the radio port is refused. */
+ for (int c = 0; c < 6; c++) {
+  setup_board(dt, "apple,j773g", 0); live_j773g = true; j773g_reg_on();
+  switch (c) {
+  case 0: reg_on_len = 0; break;                 /* no function-reg_on */
+  case 1: reg_on_len = 12; break;                /* short */
+  case 2: reg_on_len = 20; break;                /* long */
+  case 3: reg_on[4] = '8'; break;                /* pKW8 */
+  case 4: reg_on[8] = '4'; break;                /* gP14 */
+  case 5: reg_on[13] = 0x01; break;              /* another template */
+  }
+  writes = bypasses = 0;
+  assert(pcie_prepare_fdt(dt) == -1 && !writes);
+  assert(!pcie_handoff_fdt(dt) && !bypasses);
+ }
+ live_j773g = false;
 }
 static void check_admission(void *dt, bool valid)
 {
@@ -194,7 +266,7 @@ static void test_smc_failure_admission(void *dt)
   assert(pcie_prepare_fdt(dt) < 0);
   assert(writes == 1 && !bypasses);
   /* Follow kboot's optional-radio failure path: no DART bypass follows. */
-  assert(!pcie_disable_j713_fdt(dt));
+  assert(!pcie_disable_radio_fdt(dt));
   assert(!pcie_handoff_fdt(dt) && !bypasses);
  }
  smc_result = 0;
@@ -213,7 +285,7 @@ int main(void)
   }
   assert(pcie_handoff_fdt(blob) == j713 && bypasses == j713);
   assert(fdt_getprop(blob, fdt_path_offset(blob, "/pcie/port"), "pwren-gpios", NULL));
-  assert(pcie_disable_j713_fdt(blob) == (j713 ? 0 : -1));
+  assert(pcie_disable_radio_fdt(blob) == (j713 ? 0 : -1));
   const char *status = fdt_getprop(blob, fdt_path_offset(blob, "/pcie"), "status", NULL);
   assert(j713 ? status && !strcmp(status, "disabled") : !status);
   /* A disabled controller cannot have an endpoint re-admitted by handoff. */
@@ -222,6 +294,7 @@ int main(void)
  test_iommu_admission(blob);
  test_managed_streams(blob);
  test_smc_failure_admission(blob);
+ test_j773g(blob);
  return 0;
 }
 '''

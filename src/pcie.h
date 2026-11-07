@@ -8,7 +8,7 @@ int pcie_handoff_fdt(void *dt);
 int pcie_init(void);
 int pcie_shutdown(void);
 
-/* Disable optional J713 PCIe admission after rail/controller/DART failure. */
-int pcie_disable_j713_fdt(void *dt);
+/* Disable the optional J713/J773g radio after rail/controller/DART failure. */
+int pcie_disable_radio_fdt(void *dt);
 
 #endif

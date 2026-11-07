@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only OR MIT */
 
 #include "pcie.h"
+#include "adt.h"
 #include "dart.h"
+#include "kboot.h"
 #include "smc.h"
 #include "utils.h"
 
@@ -9,6 +11,44 @@
 
 /* J713 /amfm/function-reg_on pKW4 template. Its firmware bit meaning is opaque. */
 #define SMC_J713_RADIO_REG_ON_TEMPLATE BIT(23)
+
+/* An ADT SMC key action: the provider phandle, the reversed FourCC, the key, the template. */
+struct pcie_adt_pkw4 {
+    u32 phandle;
+    char four_cc[4];
+    u32 key;
+    u32 value;
+} PACKED;
+
+/*
+ * The J773g's 26.6.2 ADT gives the radio the J713's rail action:
+ * /amfm function-reg_on = pKW4('gP13', 0x800000). Admit the J713 template
+ * there only for exactly that action.
+ */
+static bool pcie_fdt_j773g_reg_on(void)
+{
+    u32 len;
+    int amfm = adt_path_offset(adt, "/amfm");
+    const struct pcie_adt_pkw4 *fn =
+        amfm < 0 ? NULL : adt_getprop(adt, amfm, "function-reg_on", &len);
+
+    return fn && len == sizeof(*fn) && !memcmp(fn->four_cc, "4WKp", 4) &&
+           fn->key == 0x67503133 /* gP13 */ && fn->value == SMC_J713_RADIO_REG_ON_TEMPLATE;
+}
+
+/*
+ * 1 where the radio rail and handoff are qualified (the J713, and the live
+ * J773g on 26.6.2 with the J713's ADT action), -1 for a live J773g whose ADT
+ * has another action, 0 for any other board, which is left alone.
+ */
+static int pcie_fdt_radio_board(void *dt)
+{
+    if (!fdt_node_check_compatible(dt, 0, "apple,j713"))
+        return 1;
+    if (kboot_is_j773g(dt))
+        return pcie_fdt_j773g_reg_on() ? 1 : -1;
+    return 0;
+}
 
 static bool pcie_fdt_node_enabled(void *dt, int node)
 {
@@ -171,10 +211,9 @@ static int pcie_fdt_enable_pwren(void *dt, int port)
     if (gpio < 0)
         return -1;
 
-    /* Only this board's upper-case gP13 action has a qualified template.
+    /* Only the qualified boards' upper-case gP13 action has a template.
      * A generic GPIO output command is not known to be equivalent. */
-    if (fdt_node_check_compatible(dt, 0, "apple,j713") ||
-        fdt_node_check_compatible(dt, gpio, "apple,smc-gpio"))
+    if (pcie_fdt_radio_board(dt) != 1 || fdt_node_check_compatible(dt, gpio, "apple,smc-gpio"))
         return -1;
     u32 key = 0x67500000; /* gP00 */
 
@@ -206,7 +245,7 @@ int pcie_prepare_fdt(void *dt)
     int host = -1;
     int prepared = 0;
 
-    if (fdt_node_check_compatible(dt, 0, "apple,j713"))
+    if (!pcie_fdt_radio_board(dt))
         return 0;
 
     while ((host = fdt_node_offset_by_compatible(dt, host, "apple,t8132-pcie")) >= 0) {
@@ -238,7 +277,7 @@ int pcie_handoff_fdt(void *dt)
     int host = -1;
     int prepared = 0;
 
-    if (fdt_node_check_compatible(dt, 0, "apple,j713"))
+    if (pcie_fdt_radio_board(dt) != 1)
         return 0;
 
     while ((host = fdt_node_offset_by_compatible(dt, host, "apple,t8132-pcie")) >= 0) {
@@ -275,18 +314,42 @@ int pcie_handoff_fdt(void *dt)
 
 /* The qualified J713 path has only its radio endpoint behind this controller.
  * No native PCIe device driver may adopt a partially prepared rail/link/DART.
- * ANS storage is independent. Never change another board's topology here.
+ * ANS storage is independent. The J773g's controller also has its Ethernet
+ * port, which the radio handoff never prepares: there disable only the ports
+ * with a described rail. Never change another board's topology here.
  */
-int pcie_disable_j713_fdt(void *dt)
+int pcie_disable_radio_fdt(void *dt)
 {
     int host = -1;
-    if (fdt_node_check_compatible(dt, 0, "apple,j713"))
+    bool j713 = !fdt_node_check_compatible(dt, 0, "apple,j713");
+
+    if (!j713 && !kboot_is_j773g(dt))
         return -1;
     while ((host = fdt_node_offset_by_compatible(dt, host, "apple,t8132-pcie")) >= 0) {
-        int ret = fdt_setprop_string(dt, host, "status", "disabled");
-        if (ret)
-            return ret;
+        if (j713) {
+            int ret = fdt_setprop_string(dt, host, "status", "disabled");
+            if (ret)
+                return ret;
+            continue;
+        }
+        /* Each write moves the later offsets: rescan, skipping disabled ports. */
+        for (bool again = true; again;) {
+            int port;
+
+            again = false;
+            fdt_for_each_subnode(port, dt, host)
+            {
+                if (!pcie_fdt_node_enabled(dt, port) || !fdt_getprop(dt, port, "pwren-gpios", NULL))
+                    continue;
+                int ret = fdt_setprop_string(dt, port, "status", "disabled");
+                if (ret)
+                    return ret;
+                again = true;
+                break;
+            }
+        }
     }
-    printf("pcie: optional J713 radio controller disabled after failed handoff\n");
+    printf("pcie: optional %s radio %s disabled after failed handoff\n", j713 ? "J713" : "J773g",
+           j713 ? "controller" : "port");
     return 0;
 }
