@@ -427,19 +427,20 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
     if (ret == 0 && stage1_window_offered() && *var_cnt < var_capacity)
         vars[(*var_cnt)++] = host_window_var;
     /*
-     * A debugusb host reading the DockChannel console makes this a debug boot: the OS keeps the
-     * debug UART as its console (kboot.c, dt_set_stdout_path). Stage 2 is built without
-     * DEBUGUSB_PROXY, so the boot arguments carry it there, as they carry aura-trial.
+     * A debugusb host reading the DockChannel console makes this a full debug boot. Stage 2 is
+     * built without DEBUGUSB_PROXY, so carry aura-debug there: it re-establishes KIS before
+     * ordinary USB setup, preserves that carrier, and keeps the OS debug UART as its console.
+     * This is intentionally scoped to an observed host on a DEBUGUSB_PROXY build.
      */
     if (ret == 0 && !aura_console_enabled() && dockchannel_uart_host_seen()) {
         size_t capacity = cur_boot_args.revision == 1   ? CMDLINE_LENGTH_RV1
                           : cur_boot_args.revision == 2 ? CMDLINE_LENGTH_RV2
                                                         : CMDLINE_LENGTH_RV3;
-        if (boot_options_append(cur_boot_args.rv3.cmdline, capacity, "aura-console")) {
+        if (boot_options_append(cur_boot_args.rv3.cmdline, capacity, "aura-debug")) {
             boot_options_set_console(true);
-            printf("chainload: debugusb host, the OS keeps the debug console\n");
+            printf("chainload: debugusb host, the next stage keeps KIS and the debug console\n");
         } else {
-            printf("chainload: no room to pass aura-console on\n");
+            printf("chainload: no room to pass aura-debug on\n");
         }
     }
 #endif

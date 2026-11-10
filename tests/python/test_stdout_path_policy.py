@@ -199,13 +199,13 @@ def test_boot_option_parsing():
 
 
 def test_stage1_passes_debugusb_on_to_stage2():
-    # Stage 2 ships without DEBUGUSB_PROXY: Stage 1 turns a debugusb host into aura-console
+    # Stage 2 ships without DEBUGUSB_PROXY: Stage 1 carries the observed debug host as aura-debug.
     source = (REPO / "src/chainload.c").read_text()
     block = source[source.index("#if defined(DEBUGUSB_PROXY) && !defined(ESP_STAGE2)"):]
     load = source[source.index("int chainload_load("):]
     guard = load.index("#ifdef DEBUGUSB_PROXY\n    /* The next aura stage skips")
     stage2_guard = load.rindex("#ifndef ESP_STAGE2", 0, guard)
-    handoff = load.index('boot_options_append(cur_boot_args.rv3.cmdline, capacity, "aura-console")')
+    handoff = load.index('boot_options_append(cur_boot_args.rv3.cmdline, capacity, "aura-debug")')
     assert stage2_guard < guard < handoff < load.index("#endif", guard)
     assert "dockchannel_uart_host_seen()" in load[guard:handoff]
     assert "boot_options_set_console(true)" in load[handoff:load.index("#endif", guard)]

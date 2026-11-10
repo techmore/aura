@@ -412,18 +412,18 @@ int main(void)
     count = 2;
     vars[0] = vars[1] = "chosen.x=1";
     assert(chainload_load("test", vars, &count, 2) == 0 && count == 2);
-    assert(!console_on && !strstr(cur_boot_args.rv3.cmdline, "aura-console"));
+    assert(!console_on && !strstr(cur_boot_args.rv3.cmdline, "aura-debug"));
 
-    /* A debugusb host reading the console: the next stage keeps the debug UART console. */
+    /* A debugusb host: the next stage establishes KIS and keeps the debug UART console. */
     offered = false;
     host_seen = true;
     strcpy(cur_boot_args.rv3.cmdline, "-v");
     count = 0;
     assert(chainload_load("test", vars, &count, 2) == 0 && count == 0);
-    assert(console_on && !strcmp(cur_boot_args.rv3.cmdline, "-v aura-console"));
+    assert(console_on && !strcmp(cur_boot_args.rv3.cmdline, "-v aura-debug"));
     /* Once is enough */
     assert(chainload_load("test", vars, &count, 2) == 0);
-    assert(!strcmp(cur_boot_args.rv3.cmdline, "-v aura-console"));
+    assert(!strcmp(cur_boot_args.rv3.cmdline, "-v aura-debug"));
     /* No room in the boot arguments: boot anyway, as a normal boot. */
     console_on = false;
     append_full = true;
