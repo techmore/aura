@@ -124,6 +124,23 @@ if args.tso:
             u.msr("ACTLR_EL1", actlr, call=lambda addr, *args: p.smp_call_sync(i, addr & ~REGION_RX_EL1, *args))
     p.kboot_set_chosen("apple,tso", "")
 
+# T8132 (M4): Stage 1 may have left ANS running with its RTKit session, which
+# apple-nvme does not adopt. Hand ANS to Linux powered off instead: nvme_init()
+# takes that session over, and nvme_shutdown() powers ANS off and keeps the SART
+# entries that kboot_prepare_dt() passes to Linux. Other SoCs are unchanged.
+if u.adt["/chosen"].chip_id == 0x8132:
+    # nvme_init() reports failure as a false return value. nvme_shutdown() reports it as
+    # ProxyRemoteError, and an aura without these commands raises ProxyCommandError.
+    # If aura marks the session reboot-required, it refuses the next stage later on.
+    try:
+        if p.nvme_init():
+            print("Shutting NVMe down for Linux (nvme_shutdown)")
+            p.nvme_shutdown()
+        else:
+            print("Warning: nvme_init failed; continuing without the ANS handoff")
+    except ProxyRemoteError as e:
+        print(f"Warning: ANS handoff failed ({e}); continuing without it")
+
 if p.kboot_prepare_dt(dtb_addr):
     print("DT prepare failed")
     sys.exit(1)
