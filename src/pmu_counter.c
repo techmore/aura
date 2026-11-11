@@ -13,6 +13,7 @@
  * stage a failed boot had reached at +3. It counts a boot that ended without a clean shutdown and
  * drops to recoveryOS once the count is too high. macOS and Linux clear the counts once they run.
  */
+#define PMU_SCRPAD_STAGE  1
 #define PMU_SCRPAD_COUNTS 2
 
 /* Find the primary PMU: its SPMI bus path, its SPMI address and the scratchpad offset. */
@@ -82,6 +83,39 @@ int pmu_clear_panic_counter(void)
     }
     printf("pmu: panic counter at %s:%02x reg %x was %u%s\n", path, addr, counter, val,
            val ? ", cleared" : "");
+    return 0;
+}
+
+/*
+ * TEST ONLY (J773s boot-hang diagnosis): write the boot stage byte at scratchpad +1, the byte
+ * Linux's macsmc-reboot sets to 0x30 once it runs (the DT's boot_stage nvmem cell). iBoot reports
+ * the stage a failed boot reached in the next boot's panic report (PanicMedicEntryBootStage), so
+ * a watchdog reset after this write names the last aura step reached, without a console.
+ */
+int pmu_set_boot_stage(u8 stage)
+{
+    char path[64];
+    u8 addr;
+    u16 scrpad;
+    if (pmu_find_scratchpad(path, sizeof(path), &addr, &scrpad))
+        return -1;
+
+    spmi_dev_t *spmi = spmi_init(path);
+    if (!spmi)
+        return -1;
+
+    u8 readback = 0;
+    int ret = spmi_ext_write_long(spmi, addr, scrpad + PMU_SCRPAD_STAGE, &stage, 1);
+    if (!ret)
+        ret = spmi_ext_read_long(spmi, addr, scrpad + PMU_SCRPAD_STAGE, &readback, 1);
+    spmi_shutdown(spmi);
+    if (ret || readback != stage) {
+        printf("pmu: boot stage 0x%02x not written at %s:%02x reg %x (ret %d, read 0x%02x)\n",
+               stage, path, addr, scrpad + PMU_SCRPAD_STAGE, ret, readback);
+        return -1;
+    }
+    printf("pmu: boot stage 0x%02x written at %s:%02x reg %x\n", stage, path, addr,
+           scrpad + PMU_SCRPAD_STAGE);
     return 0;
 }
 
