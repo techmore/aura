@@ -320,6 +320,44 @@ static void j873g_run_proxy(void)
     uartproxy_run(NULL);
 }
 
+#ifdef J773S_CRUMBS
+/*
+ * TEST ONLY (aurora-silicon/linux#1479): the J773s (Mac mini M4 Pro) hangs at boot with no
+ * console, no video and a watchdog reset about every 125 s, reported as BootStage 227. Each step
+ * below writes its own boot stage byte, which iBoot then reports in the next panic report
+ * (PanicMedicEntryBootStage): 0xa1 (161) this ESP Stage 2 is running with the watchdog off,
+ * 0xa2 (162) its initialisation is done, 0xa3 (163) the payload (U-Boot) and its device tree are
+ * ready and aura is about to hand over. Linux's macsmc-reboot writes 0x30 (48) once it runs.
+ * Only on a J773s; nothing else changes.
+ */
+static void j773s_crumb(u8 stage)
+{
+    if (chip_id != T6040 || !adt_is_compatible(adt, 0, "J773sAP"))
+        return;
+    if (pmu_set_boot_stage(stage))
+        printf("J773s: boot stage 0x%02x not recorded\n", stage);
+}
+
+#ifdef J773S_CRUMBS_HALT
+/*
+ * The control build: stop where the payload would start and let the watchdog reset the Mac 20 s
+ * later. The next panic report then shows 0xa3 and a short reset period, which proves the
+ * breadcrumbs reach the report on this Mac and times iBoot + Stage 1 + Stage 2.
+ */
+static void __attribute__((noreturn)) j773s_crumb_halt(void)
+{
+    printf("J773s: control build, not starting the payload; watchdog reset in 20 s\n");
+    if (wdt_arm_seconds(20)) {
+        printf("J773s: could not arm the watchdog; rebooting after 20 s\n");
+        mdelay(20000);
+        reboot();
+    }
+    while (1)
+        sysop("wfe");
+}
+#endif
+#endif
+
 void aura_main(void)
 {
     printf("\n\naura %s\n", aura_version);
@@ -347,6 +385,9 @@ void aura_main(void)
     smp_init();
 #endif
     wdt_disable();
+#ifdef J773S_CRUMBS
+    j773s_crumb(0xa1);
+#endif
     if (aura_trial_enabled() && wdt_arm_trial())
         printf("WDT: could not arm the trial watchdog\n");
 #ifndef BRINGUP
@@ -384,6 +425,9 @@ void aura_main(void)
         pmu_clear_panic_counter();
 
     printf("Initialization complete.\n");
+#ifdef J773S_CRUMBS
+    j773s_crumb(0xa2);
+#endif
 
     run_actions();
 
@@ -395,6 +439,13 @@ next_stage:
         next_stage.entry = NULL;
         panic("Refusing next stage while secondary callbacks are pending\n");
     }
+#ifdef J773S_CRUMBS
+    j773s_crumb(0xa3);
+#ifdef J773S_CRUMBS_HALT
+    if (chip_id == T6040 && adt_is_compatible(adt, 0, "J773sAP"))
+        j773s_crumb_halt();
+#endif
+#endif
 
     printf("Preparing to run next stage at %p...\n", next_stage.entry);
 
