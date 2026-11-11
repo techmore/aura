@@ -124,6 +124,30 @@ if args.tso:
             u.msr("ACTLR_EL1", actlr, call=lambda addr, *args: p.smp_call_sync(i, addr & ~REGION_RX_EL1, *args))
     p.kboot_set_chosen("apple,tso", "")
 
+# Post-M4 ANS (M4 and later, as in aura's nvme_post_m4()): hand it to Linux the way
+# aura's own next-stage path does (nvme_shutdown()).
+# Stage 1 may have left its RTKit session running, which apple-nvme does not adopt.
+# nvme_init() takes that session over, and nvme_shutdown() powers ANS off and keeps the
+# SART entries that kboot_prepare_dt() passes to Linux.
+# Like nvme_post_m4(), check that a property exists, not its value: on J773g
+# nvme-secure-bar has no value.
+try:
+    ans = u.adt["/arm-io/ans"]
+except KeyError:
+    ans = None
+if ans is not None and ("nvme-secure-bar" in ans._properties or
+                        "nvme-secure-reg-layout" in ans._properties):
+    # nvme_init() reports failure as a false return value. nvme_shutdown() reports it as
+    # ProxyRemoteError, and an aura without these commands raises ProxyCommandError.
+    try:
+        if p.nvme_init():
+            print("Shutting NVMe down for Linux (nvme_shutdown)")
+            p.nvme_shutdown()
+        else:
+            print("Warning: nvme_init failed; booting Linux without the ANS handoff")
+    except ProxyRemoteError as e:
+        print(f"Warning: ANS handoff failed ({e}); booting Linux without it")
+
 if p.kboot_prepare_dt(dtb_addr):
     print("DT prepare failed")
     sys.exit(1)
