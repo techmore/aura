@@ -380,6 +380,9 @@ static void j873g_run_proxy(void)
 
 void aura_main(void)
 {
+#ifdef J773S_STAGE1_CRUMBS
+    j773s_stage1_crumb(0xb1); /* C entry, before firmware_init() */
+#endif
     printf("\n\naura %s\n", aura_version);
     printf("Copyright Aurora Silicon and contributors\n");
     printf("GPL-2.0-only, with inherited code under MIT. See LICENSE.\n\n");
@@ -401,10 +404,19 @@ void aura_main(void)
     if (mcc_init() && (chip_id == T8140 || chip_id == T6040))
         panic("MCC initialization failed\n");
     mmu_init();
+#ifdef J773S_STAGE1_CRUMBS
+    j773s_stage1_crumb(0xb2);
+#endif
     aic_init();
+#ifdef J773S_STAGE1_CRUMBS
+    j773s_stage1_crumb(0xb3);
+#endif
     smp_init();
 #endif
     wdt_disable();
+#ifdef J773S_STAGE1_CRUMBS
+    j773s_stage1_crumb(0xb4);
+#endif
     if (aura_trial_enabled() && wdt_arm_trial())
         printf("WDT: could not arm the trial watchdog\n");
 #if defined(CHAINLOADING) && !defined(ESP_STAGE2)
@@ -491,6 +503,9 @@ next_stage:
     }
 #ifdef USE_FB
     fb_shutdown(next_stage.restore_logo);
+#endif
+#ifdef J773S_STAGE1_CRUMBS
+    j773s_stage1_crumb(0xb7); /* final mapped-MMIO step before the handoff */
 #endif
     mmu_shutdown();
 #endif

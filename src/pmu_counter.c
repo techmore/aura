@@ -14,6 +14,7 @@
  * drops to recoveryOS once the count is too high. macOS and Linux clear the counts once they run.
  */
 #define PMU_SCRPAD_COUNTS 2
+#define PMU_SCRPAD_STAGE  1
 
 /* Find the primary PMU: its SPMI bus path, its SPMI address and the scratchpad offset. */
 static int pmu_find_scratchpad(char *path, size_t path_len, u8 *addr, u16 *scrpad)
@@ -84,6 +85,42 @@ int pmu_clear_panic_counter(void)
            val ? ", cleared" : "");
     return 0;
 }
+
+#ifdef J773S_STAGE1_CRUMBS
+/*
+ * The J773s has no usable early console or display. Record the last completed
+ * Stage 1 step in the PMU byte iBoot copies to PanicMedicEntryBootStage after a
+ * watchdog reset. The allocation-free SPMI instance also makes the entry crumb
+ * safe before heapblock_init(). _start_c has already set adt and get_device_info()
+ * has set chip_id before aura_main() calls this. The +1 byte is iBoot's boot
+ * stage; +2 and +3 are the counts and failed-boot stage described above.
+ */
+void j773s_stage1_crumb(u8 stage)
+{
+    if (chip_id != T6040 || !adt_is_compatible(adt, 0, "J773sAP"))
+        return;
+
+    char path[64];
+    u8 addr;
+    u16 scrpad;
+    if (pmu_find_scratchpad(path, sizeof(path), &addr, &scrpad))
+        return;
+
+    spmi_dev_t *spmi = spmi_init_early(path);
+    if (!spmi)
+        return;
+
+    u8 readback = 0;
+    int ret = spmi_ext_write_long(spmi, addr, scrpad + PMU_SCRPAD_STAGE, &stage, 1);
+    if (!ret)
+        ret = spmi_ext_read_long(spmi, addr, scrpad + PMU_SCRPAD_STAGE, &readback, 1);
+    if (ret || readback != stage)
+        printf("J773s: boot stage 0x%02x not recorded (ret %d, read 0x%02x)\n", stage, ret,
+               readback);
+    else
+        printf("J773s: boot stage 0x%02x recorded\n", stage);
+}
+#endif
 
 /* Read iBoot's record of the previous boot: the counts byte and the failed boot's stage. */
 int pmu_read_boot_record(u8 *counts, u8 *error_stage)

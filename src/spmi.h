@@ -13,6 +13,10 @@
 typedef struct spmi_dev spmi_dev_t;
 
 spmi_dev_t *spmi_init(const char *adt_node);
+#ifdef J773S_STAGE1_CRUMBS
+/* Static diagnostic instance; never pass it to spmi_shutdown(). */
+spmi_dev_t *spmi_init_early(const char *adt_node);
+#endif
 void spmi_shutdown(spmi_dev_t *dev);
 
 int spmi_reg0_write(spmi_dev_t *dev, u8 addr, u8 value);

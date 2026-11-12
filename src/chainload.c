@@ -10,6 +10,7 @@
 #include "malloc.h"
 #include "memory.h"
 #include "nvme.h"
+#include "pmu_counter.h"
 #include "secboot.h"
 #include "stage1_config.h"
 #include "string.h"
@@ -398,8 +399,14 @@ int chainload_load(const char *spec, char **vars, size_t *var_cnt, size_t var_ca
     /* Only the first aura stage of a boot takes a trial: later ones already run in it. */
     bool may_trial = !aura_trial_enabled();
     trial_path[0] = 0;
+#ifdef J773S_STAGE1_CRUMBS
+    j773s_stage1_crumb(0xb5);
+#endif
     ret = rust_load_image(spec, &image, &size, &proxy_request, may_trial ? trial_path : NULL,
                           sizeof(trial_path));
+#ifdef J773S_STAGE1_CRUMBS
+    j773s_stage1_crumb(0xb6);
+#endif
     /*
      * A command that timed out fails every later one of this NVMe session, so one failure
      * (spending an aura-try marker writes and flushes the ESP) also lost the configured image.

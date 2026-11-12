@@ -87,7 +87,7 @@ struct spmi_dev {
     const struct spmi_regs *regs;
 };
 
-spmi_dev_t *spmi_init(const char *adt_node)
+static spmi_dev_t *spmi_init_into(const char *adt_node, spmi_dev_t *dev)
 {
     int adt_path[8];
     int adt_offset;
@@ -112,10 +112,6 @@ spmi_dev_t *spmi_init(const char *adt_node)
         return NULL;
     }
 
-    spmi_dev_t *dev = calloc(1, sizeof(*dev));
-    if (!dev)
-        return NULL;
-
     if (gen >= 4)
         dev->regs = &regs_gen4;
     else // Includes the error case (-1) as old adts don't have the gen property
@@ -124,6 +120,27 @@ spmi_dev_t *spmi_init(const char *adt_node)
     dev->base = base;
     return dev;
 }
+
+spmi_dev_t *spmi_init(const char *adt_node)
+{
+    spmi_dev_t *dev = calloc(1, sizeof(*dev));
+    if (!dev)
+        return NULL;
+    if (!spmi_init_into(adt_node, dev)) {
+        free(dev);
+        return NULL;
+    }
+    return dev;
+}
+
+#ifdef J773S_STAGE1_CRUMBS
+/* Allocation-free static instance for the pre-heap diagnostic; it is never shut down. */
+spmi_dev_t *spmi_init_early(const char *adt_node)
+{
+    static spmi_dev_t dev;
+    return spmi_init_into(adt_node, &dev);
+}
+#endif
 
 void spmi_shutdown(spmi_dev_t *dev)
 {
