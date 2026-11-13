@@ -44,6 +44,7 @@ u64 dart_search_range(dart_dev_t *dart, u64 paddr, size_t len);
 void dart_shutdown(dart_dev_t *dart);
 int dart_reserve_legacy_tables(void *dt, u64 dram_base, u64 dram_size);
 u64 dart_vm_base(dart_dev_t *dart);
+u64 dart_dva_base(dart_dev_t *dart);
 
 int dart_collect_native_t8110(uintptr_t base, u8 sid, u64 dram_base, u64 dram_size, u64 *pages,
                               size_t capacity, size_t *count, char *detail, size_t detail_size);
