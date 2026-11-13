@@ -65,6 +65,7 @@ static int dart_map(dart_dev_t *d, unsigned long iova, void *pa, size_t size)
 }
 static u64 dart_find_iova(dart_dev_t *d, s64 start, size_t size) { (void)d; (void)size; return start; }
 static u64 dart_vm_base(dart_dev_t *d) { (void)d; return 0; }
+static u64 dart_dva_base(dart_dev_t *d) { (void)d; return 1UL << 40; }
 static void reset(void)
 {
     disp = (dart_dev_t){.id = 0, .params = &params};
@@ -85,7 +86,7 @@ static void reset(void)
 int main(void)
 {
     reset();
-    assert(display_map_fb(0x8000, 0x100000, SZ_16K) == 0x8000);
+    assert(display_map_fb(0x8000, 0x100000, SZ_16K) == ((1UL << 40) | 0x8000));
     assert(display_unmap_fb(0x8000, SZ_16K));
     assert(page_ops[0] == 1 && page_ops[1] == 1);
 
