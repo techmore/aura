@@ -159,12 +159,22 @@ if [ $CHECK_ONLY -eq 1 ]; then
     exit 0
 fi
 
+# The answer never goes to the log: a password typed here by mistake would
+# stay on the FAT volume in plain text.
 read -r -p "Type yes to enroll this Stage 1 for $SYS: " answer
-echo "answer: $answer" >> "$LOG"
-[ "$answer" = yes ] || fail "not confirmed"
+if [ "$answer" = yes ]; then
+    answer=""
+    echo "confirmation: yes" >> "$LOG"
+else
+    answer=""
+    echo "confirmation: not yes (the typed text is not recorded)" >> "$LOG"
+    fail "not confirmed"
+fi
 
 say ""
 say "== Enrolling. kmutil asks for the volume owner's password, and may ask which installation: pick $SYS."
+say "The log records what kmutil prints, including its prompts and anything typed while it echoes."
+say "Type the password only at kmutil's Password: prompt, which does not echo."
 if command -v script > /dev/null 2>&1; then
     script -q -a "$LOG" "$@"
     rc=$?
