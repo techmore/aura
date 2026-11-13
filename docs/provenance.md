@@ -12,8 +12,8 @@ RTKit oslog-notify handling in `src/rtkit.c` derives from public commit
 is MIT licensed; these inherited portions remain MIT under `LICENSES/MIT.txt`,
 with Pavel Shago and the Asahi Linux contributors attributed in the source.
 
-The J773g series also depends on the ANS takeover introduced by commit
-`f2a8b52b` (`payload: take over a live post-M4 ANS before booting a non-Linux
-payload`). It is included in this series as commit `097f631c`; without it the
+The J773g series also depends on the change titled `payload: take over a live
+post-M4 ANS before booting a non-Linux payload`. It is carried in this series;
+without it the
 older Stage 1 leaves ANS live without a valid Stage 2 handoff and U-Boot cannot
 reach NVMe.
