@@ -239,6 +239,7 @@ static int mitigations_perform(void) { return 0; }
 static bool smp_is_alive(int cpu) { return false; }
 static int smp_call_sync0(int cpu, void (*fn)(void)) { return 0; }
 static void do_enable_tso(void) {}
+static bool kboot_is_j773g_machine(void) { return false; }
 static bool nvme_post_m4_untouched(void) { return false; }
 static bool nvme_init(void) { return true; }
 static bool nvme_shutdown(void) { return true; }
