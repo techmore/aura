@@ -9,6 +9,7 @@
 #include "dcp_iboot.h"
 #include "fb.h"
 #include "firmware.h"
+#include "kboot.h"
 #include "memory.h"
 #include "soc.h"
 #include "string.h"
@@ -74,6 +75,23 @@ static const display_config_t display_config_j873_hdmi_ext = {
     .num_dptxports = 2,
 };
 
+/* J773g has the same HDMI wiring as J873g, but iBoot leaves the main DCP
+ * running behind locked DARTs. The exact 26.6.2 board admission is checked
+ * before this configuration is selected. */
+static const display_config_t display_config_j773g = {
+    .dcp = "/arm-io/dcp",
+    .dcp_dart = "/arm-io/dart-dcp",
+    .disp_dart = "/arm-io/dart-disp0",
+    .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio0",
+    .dptx_phy = "/arm-io/dptx-phy",
+    .pmgr_dev = "DISP_CPU",
+    .dcp_alias = "dcp",
+    .dcp_index = 0,
+    .fw_version = V26_6_2,
+    .num_dptxports = 2,
+    .no_reset = true,
+};
+
 /* Config used by display_start_dcp(); the USB-C route keeps the base DCP. */
 static const display_config_t *t8152_config = &display_config_m1;
 
@@ -124,6 +142,7 @@ static const display_config_t display_config_m2 = {
     .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio",
     .dptx_phy = "/arm-io/dptx-phy",
     .num_dptxports = 2,
+    .fw_version = V13_5,
 };
 
 static const display_config_t display_config_m2_pro_max = {
@@ -146,6 +165,7 @@ static const display_config_t display_config_m2_pro_max = {
 #endif
     .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio0",
     .dptx_phy = "/arm-io/lpdptx-phy0",
+    .fw_version = V13_5,
 };
 
 static const display_config_t display_config_m2_ultra = {
@@ -159,6 +179,7 @@ static const display_config_t display_config_m2_ultra = {
     .dcp_index = 1,
     .num_dptxports = 2,
     .die = 1,
+    .fw_version = V13_5,
 };
 
 #define abs(x) ((x) >= 0 ? (x) : -(x))
@@ -309,6 +330,10 @@ static uintptr_t display_map_fb(uintptr_t iova, u64 paddr, u64 size)
         iova = iova_dcp;
     }
 
+    /* Locked legacy DARTs index their inherited tables with the low 36 bits,
+     * but the DCP requires the ADT window bits in every DVA it receives. */
+    iova |= dart_dva_base(dcp->dart_dcp);
+
     int ret = dart_map(dcp->dart_disp, iova, (void *)paddr, size);
     if (ret < 0) {
         printf("display: failed to map fb to dart-disp0\n");
@@ -335,6 +360,8 @@ const display_config_t *display_get_config(void)
         conf = &display_config_m2_pro_max;
     else if (adt_is_compatible(adt, 0, "J180dAP") || adt_is_compatible(adt, 0, "J475dAP"))
         conf = &display_config_m2_ultra;
+    else if (kboot_is_j773g_machine())
+        conf = &display_config_j773g;
     else if (chip_id == T8152)
         conf = t8152_config;
     else
@@ -350,13 +377,12 @@ const display_config_t *display_get_config(void)
 
 /*
  * Whether this stage or an earlier one may have mapped into the inherited tables
- * of a locked display DART (dart_init_adt_display()). T8140 and T8132 never get
- * that far: display_init() returns before any DCP or DART work on them, in every
- * stage, and kboot keeps their retained heap separately.
+ * of a locked display DART (dart_init_adt_display()). T8140 and non-admitted
+ * T8132 machines never get that far; J773g does and its tables must be kept.
  */
 bool display_dart_tables_inherited(void)
 {
-    if (chip_id == T8140 || chip_id == T8132)
+    if (chip_id == T8140 || (chip_id == T8132 && !kboot_is_j773g_machine()))
         return false;
 
     const display_config_t *conf = display_get_config();
@@ -425,6 +451,8 @@ int display_start_dcp(void)
     // Find the framebuffer DVA
     fb_dva_allocated = false;
     fb_dva = dart_search(dcp->dart_disp, (void *)cur_boot_args.video.base);
+    if (!DART_IS_ERR(fb_dva) && fb_dva)
+        fb_dva |= dart_dva_base(dcp->dart_dcp);
     // framebuffer is not mapped on the M1 Ultra Mac Studio
     if (DART_IS_ERR(fb_dva) || !fb_dva)
         fb_dva = display_map_fb(0, pa, size);
@@ -543,11 +571,21 @@ int display_configure(const char *config)
         ret = dcp_connect_dptx(dcp);
         if (ret < 0)
             return ret;
-        /* The T8152 DCP only brings the port up once HPD is asserted. On the
-         * J873g HDMI path the sink's HPD reaches the AP gpio, so tell the
-         * firmware. */
-        if (chip_id == T8152)
-            dcp_dptx_hpd(dcp->dptx_ep, 0, true);
+        /* Fixed HDMI only trains after its AP-side HPD is forwarded to DCP.
+         * Retained J773g firmware can consume the first assertion while its
+         * display client is still opening, so replay high after 20 ms just as
+         * the working Linux path does. */
+        if (chip_id == T8152 || kboot_is_j773g_machine()) {
+            ret = dcp_dptx_hpd(dcp->dptx_ep, 0, true);
+            if (ret < 0)
+                return ret;
+            if (kboot_is_j773g_machine()) {
+                mdelay(20);
+                ret = dcp_dptx_hpd(dcp->dptx_ep, 0, true);
+                if (ret < 0)
+                    return ret;
+            }
+        }
     }
 
     if (!display_is_external) {
@@ -567,9 +605,11 @@ int display_configure(const char *config)
     int hpd = 0, retries = 0;
 
     /* After boot DCP does not immediately report a connected display. Retry getting display
-     * information for 2 seconds.
+     * information for the board-specific settling window.
      */
-    while (retries++ < (DISPLAY_STATUS_RETRIES(display_is_dptx))) {
+    bool j773g = kboot_is_j773g_machine();
+    int status_retries = j773g ? 150 : DISPLAY_STATUS_RETRIES(display_is_dptx);
+    while (retries++ < status_retries) {
         dcp_work(dcp);
         hpd = dcp_ib_get_hpd(iboot, &timing_cnt, &color_cnt);
         /* Only the latest status query decides; the power requests above are
@@ -577,7 +617,10 @@ int display_configure(const char *config)
         ret = hpd < 0 ? hpd : 0;
         if (hpd > 0 && timing_cnt && color_cnt)
             break;
-        if (retries < DISPLAY_STATUS_RETRIES(display_is_dptx))
+        /* Service DCP once per retry above, then yield for the fixed interval.
+         * Spinning in dcp_work() for the whole interval can keep J773g inside
+         * the DCP transport and prevent the bounded outer retry from advancing. */
+        if (retries < status_retries)
             mdelay(DISPLAY_STATUS_DELAY);
     }
     printf("display: waited %d ms for display status\n", (retries - 1) * DISPLAY_STATUS_DELAY);
@@ -965,6 +1008,11 @@ int display_init(void)
         return display_init_t8152();
     }
 
+    if (kboot_is_j773g_machine()) {
+        display_is_external = true;
+        return display_configure(NULL);
+    }
+
     const char *disp_path;
     if (adt_is_compatible(adt, 0, "J180dAP") || adt_is_compatible(adt, 0, "J475dAP"))
         disp_path = "/arm-io/dispext4";
@@ -1041,7 +1089,7 @@ int display_shutdown(dcp_shutdown_mode mode)
 {
     /* Linux owns the live J700/J713/J873 controllers. Keep the inherited ASC session
      * and scanout intact at both the Stage 1 and Linux boundaries. */
-    if (chip_id == T8140 || chip_id == T8132 || chip_id == T8152)
+    if (chip_id == T8140 || (chip_id == T8132 && !kboot_is_j773g_machine()) || chip_id == T8152)
         return 0;
 
     /* We have no DCP, so just exit */
@@ -1060,9 +1108,11 @@ int display_shutdown(dcp_shutdown_mode mode)
             case DCP_SLEEP_IF_EXTERNAL:
                 if (!display_is_external)
                     printf("display: Quiescing DCP (internal)\n");
+                else if (dcp->no_reset)
+                    printf("display: Quiescing DCP (external, no reset)\n");
                 else
                     printf("display: Sleeping DCP (external)\n");
-                dcp_shutdown(dcp, display_is_external);
+                dcp_shutdown(dcp, display_is_external && !dcp->no_reset);
                 break;
             case DCP_SLEEP:
                 printf("display: Sleeping DCP (unconditional)\n");
