@@ -8,7 +8,9 @@ from test_j713_dapf_instance import block
 
 def test_j773g_board_gate(tmp_path):
     repo = Path(__file__).resolve().parents[2]
-    production = block((repo / "src/kboot_t8132.c").read_text(), "bool kboot_is_j773g(")
+    source = (repo / "src/kboot_t8132.c").read_text()
+    machine = block(source, "bool kboot_is_j773g_machine(")
+    production = block(source, "bool kboot_is_j773g(")
     # Each case breaks one fact of the J773g ADT (target J773gAP, board-id 42, chip-id
     # 0x8132, firmware-version mBoot-18000.161.10) or of the OS tree.
     harness = r'''
@@ -36,20 +38,20 @@ static void j773g(void)
     chip_id = T8132; board_id = 0x2a; os_firmware.version = V26_6_2;
     live = "J773gAP"; board = "apple,j773g"; soc = "apple,t8132";
 }
-''' + production + r'''
+''' + machine + production + r'''
 int main(void)
 {
     static char tree;
-    j773g(); assert(kboot_is_j773g(&tree));
+    j773g(); assert(kboot_is_j773g_machine()); assert(kboot_is_j773g(&tree));
     assert(!kboot_is_j773g(NULL));
-    j773g(); chip_id = 0x8122; assert(!kboot_is_j773g(&tree));
-    j773g(); board_id = 0x2c; assert(!kboot_is_j773g(&tree));
-    j773g(); live = "J713AP"; assert(!kboot_is_j773g(&tree));
+    j773g(); chip_id = 0x8122; assert(!kboot_is_j773g_machine()); assert(!kboot_is_j773g(&tree));
+    j773g(); board_id = 0x2c; assert(!kboot_is_j773g_machine()); assert(!kboot_is_j773g(&tree));
+    j773g(); live = "J713AP"; assert(!kboot_is_j773g_machine()); assert(!kboot_is_j773g(&tree));
     j773g(); board = "apple,j713"; assert(!kboot_is_j773g(&tree));  /* wrong OS tree */
     j773g(); soc = "apple,t8122"; assert(!kboot_is_j773g(&tree));
-    j773g(); os_firmware.version = V26_6; assert(!kboot_is_j773g(&tree));
-    j773g(); os_firmware.version = V26_7; assert(!kboot_is_j773g(&tree));
-    j773g(); os_firmware.version = V_UNKNOWN; assert(!kboot_is_j773g(&tree));
+    j773g(); os_firmware.version = V26_6; assert(!kboot_is_j773g_machine()); assert(!kboot_is_j773g(&tree));
+    j773g(); os_firmware.version = V26_7; assert(!kboot_is_j773g_machine()); assert(!kboot_is_j773g(&tree));
+    j773g(); os_firmware.version = V_UNKNOWN; assert(!kboot_is_j773g_machine()); assert(!kboot_is_j773g(&tree));
     return 0;
 }
 '''

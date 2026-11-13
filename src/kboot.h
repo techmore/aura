@@ -37,6 +37,7 @@ int kboot_reserve_usb_dma(void);
 
 /* True only when the live J773g on 26.6.2 boots an OS tree that describes it. */
 bool kboot_is_j773g(const void *fdt);
+bool kboot_is_j773g_machine(void);
 
 /* Disable the ISP and the DARTs only it uses on a T8132 Mac whose ADT has no camera. */
 int dt_disable_t8132_absent_isp(void *dt);
