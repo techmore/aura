@@ -535,7 +535,7 @@ int payload_run(void)
          * would get that live session. Take it over first, so nvme_shutdown() powers ANS off and
          * kboot_prepare_dt() passes the entries the payload needs to start it.
          */
-        if (!boot_spec && chip_id == T8132 && nvme_post_m4_untouched() && !nvme_init())
+        if (!boot_spec && kboot_is_j773g_machine() && nvme_post_m4_untouched() && !nvme_init())
             goto boot_failed;
         if (!boot_spec && !nvme_shutdown())
             goto boot_failed;
