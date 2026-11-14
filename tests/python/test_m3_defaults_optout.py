@@ -28,6 +28,7 @@ M1N1 = b"M" * 64                           # the stage 2 image itself; its paylo
 UBOOT = (bytes(16) + (0x10000).to_bytes(8, "little") + bytes(32) + b"ARM\x64" + bytes(4)
          + bytes(4096 - 64))               # an arm64 Image header, image_size 64 KiB
 BOARDS = {
+    "j773g": ("J773g", "apple,j773g;apple,t8132;apple,arm-platform"),
     "j613": ("J613", "apple,j613;apple,t8122;apple,arm-platform"),
     "j615": ("J615", "apple,j615;apple,t8122;apple,arm-platform"),
     "j514s": ("J514S", "apple,j514s;apple,t6030;apple,arm-platform"),
@@ -38,7 +39,7 @@ BOARDS = {
     "j516m": ("J516M", "apple,j516m;apple,t6034;apple,arm-platform"),
     "j293": ("J293", "apple,j293;apple,t8103;apple,arm-platform"),
 }
-CHIP = {"j613": "8122", "j615": "8122", "j514s": "6030", "j516s": "6030", "j516c": "6031",
+CHIP = {"j773g": "8132", "j613": "8122", "j615": "8122", "j514s": "6030", "j516s": "6030", "j516c": "6031",
         "j514c": "6031", "j514m": "6034", "j516m": "6034", "j293": "8103"}
 FAMILY = {"j613": ("asahi,t8122-", "asahi,j613-", "asahi,j615-"),
           "j615": ("asahi,t8122-", "asahi,j613-", "asahi,j615-"),
@@ -266,6 +267,10 @@ static bool nvme_set_sart_var(const char *v)
 static bool nvme_post_m4_passed_off(void)
 {
     return getenv("M1N1_TEST_POST_M4") && nvme_sart_passed && !nvme_started;
+}
+static bool nvme_post_m4_untouched(void)
+{
+    return getenv("M1N1_TEST_POST_M4") && !nvme_sart_passed && !nvme_started;
 }
 static int display_configure(const char *s) { printf("DISPLAY %s\n", s); return 0; }
 static int display_configure_second(const char *s) { printf("DISPLAY2 %s\n", s); return 0; }
@@ -987,6 +992,23 @@ def test_ans_left_as_found_without_sart_entries(tools, build, monkeypatch):
     b = boot(tools, build, b"")
     booted(b)
     assert nvme_events(b) == ["shutdown keep=0", "handoff keep=0"], b.stdout
+
+
+@pytest.mark.parametrize("build", STAGE2)
+def test_t8132_live_post_m4_ans_is_taken_over_for_the_payload(tools, build, monkeypatch):
+    monkeypatch.setenv("M1N1_TEST_POST_M4", "1")
+    b = boot(tools, build, b"", board="j773g")
+    booted(b)
+    assert nvme_events(b) == ["init", "shutdown keep=0", "handoff keep=0"], b.stdout
+
+
+@pytest.mark.parametrize("build", STAGE2)
+def test_t8132_live_post_m4_ans_takeover_failure_stops_handoff(tools, build, monkeypatch):
+    monkeypatch.setenv("M1N1_TEST_POST_M4", "1")
+    monkeypatch.setenv("M1N1_TEST_NVME_INIT_FAIL", "1")
+    b = boot(tools, build, b"", board="j773g")
+    assert b.rc == -1 and not b.booted, b.stdout
+    assert nvme_events(b) == ["init"], b.stdout
 
 
 @pytest.mark.parametrize("build", STAGE2)

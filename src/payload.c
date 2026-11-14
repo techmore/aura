@@ -526,14 +526,17 @@ int payload_run(void)
         /*
          * Linux adopts a running post-M4 ANS from boot=. The U-Boot we embed adopts a running
          * post-M4 ANS too, and can't start one from off: if an earlier stage powered ANS off
-         * (nvme.sart=), start it here and hand it on running, as for boot=. Otherwise any other
-         * payload gets ANS as this stage found it, or powered off with the SART entries passed
-         * on if this stage used it.
+         * (nvme.sart=), start it here and hand it on running, as for boot=. Older T8132 Stage 1
+         * versions instead leave ANS running without SART entries; take that session over before
+         * shutdown so the payload receives ANS off with its entries. Otherwise any other payload
+         * gets ANS as this stage found it, or powered off with the SART entries passed on if this
+         * stage used it.
          */
-        bool nvme_started = !boot_spec && nvme_post_m4_passed_off();
-        if (nvme_started && !nvme_init())
+        bool nvme_passed_off = !boot_spec && nvme_post_m4_passed_off();
+        bool nvme_untouched = !boot_spec && chip_id == T8132 && nvme_post_m4_untouched();
+        if ((nvme_passed_off || nvme_untouched) && !nvme_init())
             goto boot_failed;
-        nvme_keep_running_for_linux = boot_spec || nvme_started;
+        nvme_keep_running_for_linux = boot_spec || nvme_passed_off;
         if (!nvme_keep_running_for_linux && !nvme_shutdown())
             goto boot_failed;
         cpufreq_init();
