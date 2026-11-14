@@ -1,0 +1,60 @@
+gmake: Entering directory '/Users/seandolbec/.t3/scratch/2026-11-04-we-want-to-resolve-our-55def80d/aura-j773g-bisect/0118361f'
+INFO: Building on Darwin
+INFO: Toolchain path: /opt/homebrew/Cellar/llvm/23.1.2/bin/
+INFO: LLD path: /opt/homebrew/opt/lld/bin/
+  GZIP  build/aurora_128.bin.gz
+  GZIP  build/aurora_48.bin.gz
+  GZIP  build/aurora_256.bin.gz
+  CP    build/font.bin
+  CP    build/font_retina.bin
+  CC FP build/kboot_gpu.o
+  CC FP build/kboot_gpu_t8152.o
+  KEY   build/secboot_key.h
+  CFG   build/build_cfg.h
+  CC FP build/kboot_gpu_m4.o
+  TAG   build/build_tag.h
+  CC FP build/math/expf.o
+  CC FP build/math/exp2f_data.o
+  CC FP build/math/powf.o
+  CC FP build/math/powf_data.o
+  RS    build/librust.a
+  CC    build/boot_storage.o
+  CC    build/adt.o
+  CC    build/afk.o
+  CC    build/aic.o
+  CC    build/asc.o
+    Blocking waiting for file lock on package cache
+  BIN   build/aurora_48.o
+    Blocking waiting for file lock on package cache
+  BIN   build/aurora_128.o
+    Blocking waiting for file lock on package cache
+  BIN   build/aurora_256.o
+    Blocking waiting for file lock on package cache
+  CC    build/chainload.o
+  AS    build/chainload_asm.o
+    Blocking waiting for file lock on package cache
+   Compiling compiler_builtins v0.1.160 (/opt/homebrew/Cellar/rust/1.98.1/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+  CC    build/chickens.o
+  CC    build/clk.o
+  CC    build/cpufreq.o
+  CC    build/cpufreq_t6040.o
+  CC    build/dapf.o
+  CC    build/dart.o
+  CC    build/dcp.o
+  CC    build/dcp_iboot.o
+  CC    build/devicetree.o
+  CC    build/display.o
+  CC    build/dockchannel_uart.o
+  CC    build/exception.o
+   Compiling core v0.0.0 (/opt/homebrew/Cellar/rust/1.98.1/lib/rustlib/src/rust/library/core)
+  AS    build/exception_asm.o
+  CC    build/fb.o
+gmake: *** Deleting file 'build/display.o'
+gmake: *** [Makefile:325: build/fb.o] Interrupt: 2
+gmake: *** [Makefile:308: build/exception_asm.o] Interrupt: 2
+gmake: *** [Makefile:301: build/librust.a] Interrupt: 2
+gmake: *** Deleting intermediate file 'build/aurora_128.bin.gz'
+gmake: *** Deleting intermediate file 'build/aurora_256.bin.gz'
+gmake: *** Deleting intermediate file 'build/aurora_48.bin.gz'
+gmake: *** Deleting intermediate file 'build/font_retina.bin'
+gmake: *** Deleting intermediate file 'build/font.bin'
