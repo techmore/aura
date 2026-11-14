@@ -1,10 +1,19 @@
 """Exercise the firmware-cache initializer with rejected layouts and status reads."""
 from pathlib import Path
+import json
 import subprocess
 
 
 def test_firmware_cache_init(tmp_path):
-    source = (Path(__file__).resolve().parents[2] / "src/mcc.c").read_text()
+    repo = Path(__file__).resolve().parents[2]
+    source = (repo / "src/mcc.c").read_text()
+    # The J773s (Mac mini, M4 Pro) values, reduced from its IODeviceTree.
+    j773s = json.loads((repo / "tests/data/j773s-t6041-mcc.json").read_text())
+    assert j773s["chip_id"] == "0x6040" and j773s["mcc_compatible"] == "mcc,t6041"
+    assert (j773s["amcc_reg_idx"], j773s["amcc_count"], j773s["dcs_count_per_amcc"],
+            j773s["lock_regs_plane_count"], int(j773s["lock_regs_plane_stride"], 16)) == (12, 4, 4, 4, 0x40000)
+    assert [(int(a["base"], 16), int(a["size"], 16)) for a in j773s["apertures"]] == [
+        (0x220000000 + i * 0x2000000, 0x200000) for i in range(4)]
     helper = source[source.index("static int mcc_init_firmware_cache("):source.index("\nint mcc_init(void)")]
     harness = r'''
 #include <stdbool.h>
@@ -18,6 +27,8 @@ typedef uint32_t u32;
 #define T6040 0x6040
 #define MAX_MCC_INSTANCES 16
 #define T8103_PLANE_STRIDE 0x40000
+#define J773S_BOARD_ID @BOARD@
+#define J773S_COMPAT "@COMPAT@"
 static void *adt;
 static u32 chip_id = T6040, board_id = 6;
 static int mcc_count;
@@ -26,9 +37,12 @@ static struct {u64 plane_base,plane_stride; int plane_count,dcs_count; void *tz;
 static u64 count=4, channels=4, planes=4, stride=0x40000, aperture=0x200000;
 static u32 reg_idx=12;
 static bool is_t6041=true;
+static const char *root_compat="J616sAP";
 static int bad_status=-1, reads, bad_reg=-1;
 static int adt_path_offset(void *a, const char *p) {return 2;}
-static bool adt_is_compatible(void *a,int n,const char *p) {return is_t6041;}
+static bool adt_is_compatible(void *a,int n,const char *p) {
+ return n==0 ? !strcmp(p,root_compat) : is_t6041 && !strcmp(p,"mcc,t6041");
+}
 static void *adt_getprop(void *a,int n,const char *p,void *length) {return &count;}
 static int getprop(void *a,int n,const char *p,u32 *v) {*v=reg_idx;return 0;}
 #define ADT_GETPROP(a,n,p,v) getprop(a,n,p,v)
@@ -70,11 +84,24 @@ int main(void) {
  reset();stride=0x80000;assert(mcc_init_firmware_cache(1,path)<0 && !reads);stride=0x40000;
  reset();aperture=4;assert(mcc_init_firmware_cache(1,path)<0 && !reads);aperture=0x200000;
  reset();bad_reg=15;assert(mcc_init_firmware_cache(1,path)<0 && !reads);
+ /* J614s: board-id 4 is admitted only with its root compatible. */
+ reset();board_id=4;root_compat="J614sAP";assert(mcc_init_firmware_cache(1,path)==0 && reads==16);
+ reset();root_compat="J773sAP";assert(mcc_init_firmware_cache(1,path)<0 && !reads);
+ /* J773s: the J616s layout under its own board-id and root compatible. */
+ reset();board_id=J773S_BOARD_ID;root_compat=J773S_COMPAT;
+ assert(mcc_init_firmware_cache(1,path)==0 && mcc_initialized && reads==16);
+ reset();bad_status=5;assert(mcc_init_firmware_cache(1,path)<0 && reads==6);
+ reset();planes=5;assert(mcc_init_firmware_cache(1,path)<0 && !reads);planes=4;
+ reset();stride=0x80000;assert(mcc_init_firmware_cache(1,path)<0 && !reads);stride=0x40000;
+ reset();root_compat="J616sAP";assert(mcc_init_firmware_cache(1,path)<0 && !reads);
+ reset();board_id=3;root_compat=J773S_COMPAT;assert(mcc_init_firmware_cache(1,path)<0 && !reads);
+ board_id=6;root_compat="J616sAP";
  reset();is_t6041=false;chip_id=0x8140;reg_idx=0;
  assert(mcc_init_firmware_cache(1,path)==0 && mcc_initialized && !reads);
  return 0;
 }
 '''
+    harness = harness.replace("@BOARD@", str(j773s["board_id"])).replace("@COMPAT@", j773s["root_compatible"])
     cfile = tmp_path / "mcc.c"
     binary = tmp_path / "mcc-test"
     cfile.write_text(harness)
