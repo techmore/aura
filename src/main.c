@@ -422,6 +422,14 @@ void aura_main(void)
     if (aura_debug_enabled())
         tps6598x_enable_debugusb();
 #endif
+#ifdef J773G_DISPLAY_PROXY
+    if (kboot_is_j773g_machine()) {
+        usb_init();
+        usb_iodev_init();
+        printf("J773g: display diagnostic proxy ready before DCP init\n");
+        uartproxy_run(NULL);
+    }
+#endif
 #ifdef USE_FB
     display_init();
     // Kick DCP to sleep, so dodgy monitors which cause reconnect cycles don't cause us to lose the
