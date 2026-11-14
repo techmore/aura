@@ -396,6 +396,13 @@ void aura_main(void)
     else if (!aura_trial_enabled())
         printf("WDT: boot watchdog armed (%u s)\n", WDT_BOOT_SECONDS);
 #endif
+    if (aura_trial_enabled() &&
+        boot_option_present(cur_boot_args.rv3.cmdline, sizeof(cur_boot_args.rv3.cmdline),
+                            "aura-test-hang")) {
+        printf("TEST ONLY: hanging after the trial watchdog was armed\n");
+        while (1)
+            sysop("wfe");
+    }
 #ifndef BRINGUP
     if (pmgr_init() && chip_id == T8140)
         panic("T8140 PMGR initialization failed\n");
