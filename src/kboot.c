@@ -7691,10 +7691,7 @@ static int dt_set_j773g_display_maps(unsigned int unused)
     int disp0 = fdt_path_offset(dt, "disp0");
     if (disp0 < 0)
         bail("FDT: J773g DT has no disp0\n");
-    if (fdt_getprop(dt, disp0, "memory-region", NULL)) {
-        printf("FDT: J773g disp0 regions already described by the DT\n");
-        return 0;
-    }
+    bool described = fdt_getprop(dt, disp0, "memory-region", NULL);
 
     int vram_path[8];
     int vram = adt_path_offset_trace(adt, "/vram", vram_path);
@@ -7718,6 +7715,11 @@ static int dt_set_j773g_display_maps(unsigned int unused)
     j773g_display_log("disp0 SID0", &sid0);
     if (walk0)
         bail("FDT: J773g disp0 SID0 has a mapping outside its segment and framebuffer\n");
+    if (described) {
+        /* The walk above is read only and logged; a DT that describes disp0 is kept as it is. */
+        printf("FDT: J773g disp0 regions already described by the DT\n");
+        return 0;
+    }
     int seg0 = j773g_display_segment(&sid0);
     if (seg0 < 0 || !sid0.fb_bytes)
         bail("FDT: J773g disp0 SID0 does not map one whole segment and the framebuffer\n");
