@@ -9026,9 +9026,15 @@ static int dt_set_t8132_aop(const char *path)
     const char *why;
     int node;
 
+    /*
+     * No other M4 board's AOP handoff is qualified. An AOP the OS tree
+     * enables there would start with no DAPF and no reserved firmware.
+     */
     if (fdt_node_check_compatible(dt, 0, "apple,j713") &&
-        fdt_node_check_compatible(dt, 0, "apple,j604"))
-        return 0; /* No other M4 board's AOP handoff is qualified. */
+        fdt_node_check_compatible(dt, 0, "apple,j604")) {
+        why = "its handoff is not qualified on this board";
+        goto disable;
+    }
 
     int chosen = fdt_path_offset(dt, "/chosen");
     if (chosen < 0 ||
