@@ -160,7 +160,7 @@ static struct sart_entry nvme_sart_saved[16];
 static int nvme_sart_saved_cnt;
 /* aura only reads the drive; only a proxy-issued flush means the drive has data to settle. */
 static bool nvme_wrote;
-bool nvme_keep_running_for_linux = false;
+bool nvme_keep_running_for_linux = true; /* TEST-ONLY (J773g P1 proxy boots): Linux adopts a running ANS */
 static u8 nvme_die;
 /* When this stage started the ANS firmware, for the shutdown timing line. */
 static u64 nvme_boot_ticks;
