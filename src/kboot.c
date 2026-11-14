@@ -7721,8 +7721,9 @@ static int dt_set_j773g_display_maps(unsigned int unused)
         return 0;
     }
     int seg0 = j773g_display_segment(&sid0);
-    if (seg0 < 0 || !sid0.fb_bytes)
-        bail("FDT: J773g disp0 SID0 does not map one whole segment and the framebuffer\n");
+    /* The retained framebuffer is a physical handoff: reserved whether or not SID0 maps it now. */
+    if (seg0 < 0)
+        bail("FDT: J773g disp0 SID0 does not map exactly one whole DCP segment\n");
     int seg16 = -1;
     if (piodma) {
         int walk16 = dart_walk_locked_t8110(0x30a300000, 0xc000, 16, j773g_dram_start,
