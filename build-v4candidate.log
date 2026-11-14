@@ -1,0 +1,292 @@
+INFO: Building on Darwin
+INFO: Toolchain path: /opt/homebrew/Cellar/llvm/23.1.2/bin/
+INFO: LLD path: /opt/homebrew/opt/lld/bin/
+Makefile:373: warning: overriding commands for target `&'
+Makefile:367: warning: ignoring old commands for target `&'
+  TAG   build/build_tag.h
+  KEY   build/secboot_key.h
+  CFG   build/build_cfg.h
+  CC    build/boot_storage.o
+  CC    build/adt.o
+  CC    build/afk.o
+  CC    build/aic.o
+  CC    build/asc.o
+  GZIP  build/aurora_48.bin.gz
+  BIN   build/aurora_48.o
+  GZIP  build/aurora_128.bin.gz
+  BIN   build/aurora_128.o
+  GZIP  build/aurora_256.bin.gz
+  BIN   build/aurora_256.o
+  CC    build/chainload.o
+  AS    build/chainload_asm.o
+  CC    build/chickens.o
+  CC    build/clk.o
+  CC    build/cpufreq.o
+  CC    build/cpufreq_t6040.o
+  CC    build/dapf.o
+  CC    build/dart.o
+  CC    build/dcp.o
+  CC    build/dcp_iboot.o
+  CC    build/debugport.o
+  CC    build/devicetree.o
+  CC    build/display.o
+  CC    build/dockchannel_uart.o
+  CC    build/exception.o
+  AS    build/exception_asm.o
+  CC    build/fb.o
+  CP    build/font.bin
+  BIN   build/font.o
+  CP    build/font_retina.bin
+  BIN   build/font_retina.o
+  CC    build/firmware.o
+  CC    build/gxf.o
+  AS    build/gxf_asm.o
+  CC    build/heapblock.o
+  CC    build/i2c.o
+  CC    build/iodev.o
+  CC    build/iova.o
+  CC    build/isp.o
+  CC    build/j873.o
+  CC    build/kboot.o
+  CC    build/kboot_atc.o
+  CC    build/kboot_audio.o
+  CC    build/kboot_mte.o
+  CC    build/kboot_gpu_t8122.o
+  CC    build/kboot_gpu_t8122_power.o
+  CC    build/kboot_pmp_t8122.o
+  CC    build/kboot_t6020_compat.o
+  CC    build/kboot_display_handoff.o
+  CC    build/kboot_display_facts.o
+  CC    build/kboot_gpu26.o
+  CC    build/kboot_gpu_t6031.o
+  CC    build/kboot_t6031.o
+  CC    build/main.o
+  CC    build/boot_options.o
+  CC    build/mitigations.o
+  CC    build/mcc.o
+  CC    build/memory.o
+  AS    build/memory_asm.o
+  CC    build/nvme.o
+  CC    build/payload.o
+  CC    build/j813_n1.o
+  CC    build/pcie.o
+  CC    build/pcie_fdt.o
+  CC    build/pcie_t6050.o
+  CC    build/pmgr.o
+  CC    build/proxy.o
+  CC    build/ringbuffer.o
+  CC    build/rtkit.o
+  CC    build/sart.o
+  CC    build/secboot.o
+  CC    build/sep.o
+  CC    build/stage1_config.o
+  CC    build/stage1_proxy.o
+  CC    build/sio.o
+  CC    build/smc.o
+  CC    build/ctxr_exec.o
+  CC    build/smp.o
+  CC    build/spmi.o
+  CC    build/pmu_counter.o
+  CC    build/ace3.o
+  AS    build/start.o
+  CC    build/startup.o
+  CC    build/string.o
+  CC    build/tunables.o
+  CC    build/tunables_static.o
+  CC    build/tps6598x.o
+  CC    build/tps6598x_command_core.o
+  CC    build/uart.o
+  CC    build/uartproxy.o
+  CC    build/usb.o
+  CC    build/usb_t8152.o
+  CC    build/usb_dwc3.o
+  CC    build/usb_dwc3_hs.o
+  CC    build/usb_dwc3_ss.o
+  CC    build/usb_dwc3_retain.o
+  CC    build/usb_cdc.o
+  CC    build/usb_cdc_atc.o
+  CC    build/usb_cdc_bulk.o
+  CC    build/usb_cdc_ss_desc.o
+  CC    build/usb_cdc_state.o
+  CC    build/utils.o
+  AS    build/utils_asm.o
+  CC    build/vsprintf.o
+  CC    build/wdt.o
+  CC    build/chickens/avalanche.o
+  CC    build/chickens/blizzard.o
+  CC    build/chickens/cyclone_typhoon.o
+  CC    build/chickens/everest.o
+  CC    build/chickens/firestorm.o
+  CC    build/chickens/hurricane_zephyr.o
+  CC    build/chickens/icestorm.o
+  CC    build/chickens/monsoon_mistral.o
+  CC    build/chickens/sawtooth.o
+  CC    build/chickens/twister.o
+  CC    build/dcp/atc_phy.o
+  CC    build/dcp/dpav_ep.o
+  CC    build/dcp/dptx_phy.o
+  CC    build/dcp/dptx_port_ep.o
+  CC    build/dcp/parser.o
+  CC    build/dcp/system_ep.o
+  CC    build/hv/hv.o
+  CC    build/hv/hv_aic.o
+  AS    build/hv/hv_asm.o
+  CC    build/hv/hv_exc.o
+src/hv/hv_exc.c:34:12: warning: variable 'exc_entry_time' set but not used [-Wunused-but-set-global]
+   34 | static u64 exc_entry_time;
+      |            ^
+1 warning generated.
+  CC    build/hv/hv_sprr.o
+  CC    build/hv/hv_virtio.o
+  CC    build/hv/hv_vm.o
+  CC    build/hv/hv_vuart.o
+  CC    build/hv/hv_wdt.o
+src/hv/hv_wdt.c:21:12: warning: variable 'cpu_dbg_base' set but not used [-Wunused-but-set-global]
+   21 | static u64 cpu_dbg_base = 0;
+      |            ^
+1 warning generated.
+  CC    build/minilzlib/dictbuf.o
+  CC    build/minilzlib/inputbuf.o
+  CC    build/minilzlib/lzma2dec.o
+  CC    build/minilzlib/lzmadec.o
+  CC    build/minilzlib/rangedec.o
+  CC    build/minilzlib/xzstream.o
+  CC    build/tinf/adler32.o
+  CC    build/tinf/crc32.o
+  CC    build/tinf/tinfgzip.o
+  CC    build/tinf/tinflate.o
+  CC    build/tinf/tinfzlib.o
+  CC    build/dlmalloc/malloc.o
+  CC    build/libfdt/fdt_addresses.o
+  CC    build/libfdt/fdt_check.o
+  CC    build/libfdt/fdt_empty_tree.o
+  CC    build/libfdt/fdt_ro.o
+  CC    build/libfdt/fdt_rw.o
+  CC    build/libfdt/fdt_strerror.o
+  CC    build/libfdt/fdt_sw.o
+  CC    build/libfdt/fdt_wip.o
+  CC    build/libfdt/fdt.o
+  CC FP build/kboot_gpu.o
+  CC FP build/kboot_gpu_t8152.o
+  CC FP build/kboot_gpu_m4.o
+  CC FP build/math/expf.o
+  CC FP build/math/exp2f_data.o
+  CC FP build/math/powf.o
+  CC FP build/math/powf_data.o
+  RS    build/librust.a
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling compiler_builtins v0.1.160 (/opt/homebrew/Cellar/rust/1.98.1/lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins)
+   Compiling core v0.0.0 (/opt/homebrew/Cellar/rust/1.98.1/lib/rustlib/src/rust/library/core)
+   Compiling version_check v0.9.5
+   Compiling versions v0.1.0 (/private/tmp/aura-v4B.PmcYAP/rust/versions)
+   Compiling generic-array v0.14.7
+   Compiling alloc v0.0.0 (/opt/homebrew/Cellar/rust/1.98.1/lib/rustlib/src/rust/library/alloc)
+   Compiling typenum v1.20.1
+   Compiling cpufeatures v0.2.17
+   Compiling log v0.4.33
+   Compiling bitflags v2.13.0
+   Compiling cfg-if v1.0.5
+   Compiling ed25519-compact v2.6.1
+   Compiling sha1_smol v1.0.1
+   Compiling uuid v1.23.4
+   Compiling fatfs v0.4.0 (https://github.com/aurora-silicon/fatfs?rev=7d505fbfa37a945af5549517f47c1d2e87a8333e#7d505fbf)
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling digest v0.10.7
+   Compiling sha2 v0.10.9
+   Compiling rust v0.1.0 (/private/tmp/aura-v4B.PmcYAP/rust)
+warning: struct `InitDataBuilderG15V14_8_3` is never constructed
+  --> src/gpu/initdata.rs:35:19
+   |
+35 | pub(crate) struct InitDataBuilder;
+   |                   ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: multiple associated functions are never used
+   --> src/gpu/initdata.rs:40:8
+    |
+ 38 | impl InitDataBuilder::ver {
+    | -------------------- associated functions in this implementation
+ 39 |     /// Create the HwDataShared1 structure, which is used in two places in InitData.
+ 40 |     fn hw_shared1(cfg: &hw::HwConfig, ret: &mut raw::HwDataShared1) {
+    |        ^^^^^^^^^^
+...
+ 47 |     fn init_curve(
+    |        ^^^^^^^^^^
+...
+ 71 |     fn hw_shared2(cfg: &hw::HwConfig, pwr: &hw::PwrConfig, ret: &mut raw::HwDataShared2) {
+    |        ^^^^^^^^^^
+...
+134 |     fn hw_shared3(cfg: &hw::HwConfig, ret: &mut raw::HwDataShared3) {
+    |        ^^^^^^^^^^
+...
+144 |     fn t81xx_data(cfg: &hw::HwConfig, pwr: &hw::PwrConfig, _ret: &mut raw::T81xxData) {
+    |        ^^^^^^^^^^
+...
+165 |     fn hwdata_a(cfg: &hw::HwConfig, pwr: &hw::PwrConfig, raw: &mut raw::HwDataA::ver) {
+    |        ^^^^^^^^
+...
+429 |     fn hwdata_b(cfg: &hw::HwConfig, dyncfg: &hw::DynConfig, raw: &mut raw::HwDataB::ver) {
+    |        ^^^^^^^^
+...
+568 |     fn globals(cfg: &hw::HwConfig, pwr: &hw::PwrConfig, raw: &mut raw::Globals::ver) {
+    |        ^^^^^^^
+
+warning: constant `MAX_CORES_PER_CLUSTERG15V14_8_3` is never used
+   --> src/gpu/raw.rs:132:7
+    |
+132 | const MAX_CORES_PER_CLUSTER: usize = {
+    |       ^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `PowerZoneG15V14_8_3` is never constructed
+   --> src/gpu/raw.rs:146:19
+    |
+146 | pub(crate) struct PowerZone {
+    |                   ^^^^^^^^^
+
+warning: struct `HwDataAG15V14_8_3` is never constructed
+   --> src/gpu/raw.rs:173:19
+    |
+173 | pub(crate) struct HwDataA {
+    |                   ^^^^^^^
+
+warning: constant `IO_MAPPING_COUNTG15V14_8_3` is never used
+   --> src/gpu/raw.rs:562:7
+    |
+562 | const IO_MAPPING_COUNT: usize = {
+    |       ^^^^^^^^^^^^^^^^
+
+warning: struct `HwDataBG15V14_8_3` is never constructed
+   --> src/gpu/raw.rs:584:19
+    |
+584 | pub(crate) struct HwDataB {
+    |                   ^^^^^^^
+
+warning: struct `GlobalsSubG15V14_8_3` is never constructed
+   --> src/gpu/raw.rs:801:19
+    |
+801 | pub(crate) struct GlobalsSub {
+    |                   ^^^^^^^^^^
+
+warning: struct `GlobalsG15V14_8_3` is never constructed
+   --> src/gpu/raw.rs:827:19
+    |
+827 | pub(crate) struct Globals {
+    |                   ^^^^^^^
+
+warning: `rust` (lib) generated 9 warnings
+    Finished `release` profile [optimized] target(s) in 20.17s
+warning: the following packages contain code that will be rejected by a future version of Rust: core v0.0.0 (/opt/homebrew/Cellar/rust/1.98.1/lib/rustlib/src/rust/library/core)
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+  LD    build/aura.elf
+  MACHO build/aura.macho
+  LDRAW build/aura-raw.elf
+  RAW   build/aura.bin
+  BOOT  build/aura-boot.macho: 4177920 bytes, entry at file offset 0x10800, no __TEXT_BOOT_EXEC
+build/aura.bin: verified aurora logos at 48, 128, and 256 px
+rm build/font.bin build/aurora_128.bin.gz build/aurora_48.bin.gz build/aurora_256.bin.gz build/font_retina.bin
