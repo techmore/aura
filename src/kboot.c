@@ -7579,6 +7579,7 @@ struct j773g_display_maps {
     u32 count;
     u64 fb_base, fb_size, fb_bytes;
     u64 bytes[32];
+    u64 bad_iova, bad_phys;
 };
 
 static int j773g_display_page(u64 iova, u64 physical, void *opaque)
@@ -7599,7 +7600,25 @@ static int j773g_display_page(u64 iova, u64 physical, void *opaque)
         maps->fb_bytes += SZ_16K;
         return 0;
     }
+    maps->bad_iova = iova;
+    maps->bad_phys = physical;
     return -1; /* Never leave an inherited mapping undescribed. */
+}
+
+static void j773g_display_log(const char *what, const struct j773g_display_maps *maps)
+{
+    for (u32 i = 0; i < maps->count; i++)
+        if (maps->bytes[i])
+            printf("FDT: J773g %s: segment %u (kind %u) phys 0x%lx remap 0x%lx: 0x%lx of 0x%lx "
+                   "bytes mapped\n",
+                   what, i, maps->segments[i].unk, maps->segments[i].phys,
+                   maps->segments[i].remap, maps->bytes[i],
+                   ALIGN_UP((u64)maps->segments[i].size, SZ_16K));
+    printf("FDT: J773g %s: framebuffer [0x%lx, +0x%lx): 0x%lx bytes mapped\n", what,
+           maps->fb_base, maps->fb_size, maps->fb_bytes);
+    if (maps->bad_phys)
+        printf("FDT: J773g %s: undescribed page iova 0x%lx -> phys 0x%lx\n", what,
+               maps->bad_iova, maps->bad_phys);
 }
 
 /* The one whole segment a stream maps, or -1. */
@@ -7694,17 +7713,20 @@ static int dt_set_j773g_display_maps(unsigned int unused)
     bool piodma = fdt_path_offset(dt, "disp0_piodma") >= 0;
 
     /* The T8132 display DART; reading tables must not enable or reset streams. */
-    if (dart_walk_locked_t8110(0x30a300000, 0xc000, 0, j773g_dram_start, j773g_dram_size,
-                               j773g_display_page, &sid0))
+    int walk0 = dart_walk_locked_t8110(0x30a300000, 0xc000, 0, j773g_dram_start,
+                                       j773g_dram_size, j773g_display_page, &sid0);
+    j773g_display_log("disp0 SID0", &sid0);
+    if (walk0)
         bail("FDT: J773g disp0 SID0 has a mapping outside its segment and framebuffer\n");
     int seg0 = j773g_display_segment(&sid0);
     if (seg0 < 0 || !sid0.fb_bytes)
         bail("FDT: J773g disp0 SID0 does not map one whole segment and the framebuffer\n");
     int seg16 = -1;
     if (piodma) {
-        if (dart_walk_locked_t8110(0x30a300000, 0xc000, 16, j773g_dram_start, j773g_dram_size,
-                                   j773g_display_page, &sid16) ||
-            sid16.fb_bytes || (seg16 = j773g_display_segment(&sid16)) < 0)
+        int walk16 = dart_walk_locked_t8110(0x30a300000, 0xc000, 16, j773g_dram_start,
+                                            j773g_dram_size, j773g_display_page, &sid16);
+        j773g_display_log("PIODMA SID16", &sid16);
+        if (walk16 || sid16.fb_bytes || (seg16 = j773g_display_segment(&sid16)) < 0)
             bail("FDT: J773g PIODMA SID16 does not map exactly one whole segment\n");
     }
 
