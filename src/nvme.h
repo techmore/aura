@@ -9,10 +9,18 @@ struct sart_entry;
 
 bool nvme_init(void);
 extern bool nvme_keep_running_for_linux;
+/* nvme_shutdown(): quiesce RTKit for an OS that wakes ANS as iBoot hands it over */
+extern bool nvme_quiesce_for_next;
 bool nvme_shutdown(void);
-/* Post-M4: how a stage that powered ANS off tells the next one to start it again. */
+int nvme_cold_handoff(bool idle, bool no_probe);
+/*
+ * Post-M4: whether an earlier stage powered ANS off and passed its SART entries on (nvme.sart=)
+ * for this stage to start it again, or passed none and this stage has not used NVMe, so ANS is
+ * as the earlier stage left it (running, from a T8132 Stage 1 before the powered-off handoff).
+ */
 bool nvme_post_m4(void);
 bool nvme_post_m4_passed_off(void);
+bool nvme_post_m4_untouched(void);
 int nvme_sart_entries(struct sart_entry *entries, int max, bool *off);
 char *nvme_sart_var(void);
 bool nvme_set_sart_var(const char *val);
