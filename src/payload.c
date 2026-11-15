@@ -210,6 +210,45 @@ static void *load_kernel(void *p, size_t size)
     }
 }
 
+static bool kernel_has_bytes(const u8 *bytes, size_t size)
+{
+    const u8 *p = (const u8 *)kernel;
+
+    if (!p || kernel_payload_size < size)
+        return false;
+
+    const u8 *last = p + kernel_payload_size - size;
+    while (p <= last && (p = memchr(p, bytes[0], last - p + 1))) {
+        if (!memcmp(p, bytes, size))
+            return true;
+        p++;
+    }
+    return false;
+}
+
+/*
+ * The deployed U-Boot #38/#40 family has no explicit capability marker. Identify those legacy
+ * consumers affirmatively: an AArch64 Image carrying both a U-Boot version banner and the exact
+ * adjacent property/consumer diagnostic from apple_nvme_start_from_off(). A bare property-name
+ * occurrence is not evidence that a payload implements the powered-off contract.
+ */
+static bool kernel_starts_ans_from_off(void)
+{
+    static const u8 arm64_magic[] = {'A', 'R', 'M', 0x64};
+    static const u8 uboot_banner[] = "U-Boot 20";
+    static const u8 consumer[] =
+        "apple,sart-entries\0"
+        "%s %s: ANS is running, but the boot loader passed it on powered off";
+    const u8 *p = (const u8 *)kernel;
+
+    if (!p || kernel_payload_size < 0x38 + sizeof(arm64_magic) ||
+        memcmp(p + 0x38, arm64_magic, sizeof(arm64_magic)))
+        return false;
+
+    return kernel_has_bytes(uboot_banner, sizeof(uboot_banner) - 1) &&
+           kernel_has_bytes(consumer, sizeof(consumer));
+}
+
 #define MAX_VAR_NAME 64
 #define MAX_VAR_SIZE 1024
 
@@ -551,18 +590,27 @@ int payload_run(void)
 
     if (kernel && fdt) {
         /*
-         * Linux adopts a running post-M4 ANS from boot=. For nvme.sart=, start ANS here and leave
-         * it running for payloads that adopt a Stage-2-owned session. Older T8132 Stage 1 versions
-         * instead leave their own session running without SART entries. U-Boot versions that
-         * dropped adoption of such an inherited session require ANS off with apple,sart-entries, so
-         * take that session over and shut it down. This changes the old-Stage-1 contract for every
-         * non-boot= T8132 payload; keep the aura and U-Boot pins coordinated.
+         * A payload takes a post-M4 ANS this stage has not used in one of two states. Linux from
+         * boot=, and U-Boot releases that adopt a session but cannot start ANS from off, take it
+         * running: if an earlier stage powered it off (nvme.sart=), start it here. On T8132, a
+         * payload positively identified as a legacy U-Boot off-contract consumer (the #38/#40
+         * family, which refuses a running ANS) takes it off with apple,sart-entries instead: leave
+         * a powered-off ANS off, and take over and shut down the session a T8132 Stage 1 up to
+         * 1.0.0b10 leaves running without entries. Otherwise ANS goes on as before; a takeover that
+         * fails stops the handoff.
          */
         bool nvme_passed_off = !boot_spec && nvme_post_m4_passed_off();
         bool nvme_untouched = !boot_spec && chip_id == T8132 && nvme_post_m4_untouched();
-        if ((nvme_passed_off || nvme_untouched) && !nvme_init())
+        bool nvme_hand_off =
+            chip_id == T8132 && (nvme_passed_off || nvme_untouched) && kernel_starts_ans_from_off();
+        if (chip_id == T8132 && (nvme_passed_off || nvme_untouched))
+            printf("Payload: post-M4 ANS %s, legacy U-Boot off-contract consumer signature %s: "
+                   "handing it on %s\n",
+                   nvme_passed_off ? "off from Stage 1" : "live from Stage 1",
+                   nvme_hand_off ? "found" : "not found", nvme_hand_off ? "off" : "running");
+        if ((nvme_hand_off ? nvme_untouched : nvme_passed_off) && !nvme_init())
             goto boot_failed;
-        nvme_keep_running_for_linux = boot_spec || nvme_passed_off;
+        nvme_keep_running_for_linux = boot_spec || (nvme_passed_off && !nvme_hand_off);
         if (!nvme_keep_running_for_linux && !nvme_shutdown())
             goto boot_failed;
         cpufreq_init();
