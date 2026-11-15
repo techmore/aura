@@ -371,6 +371,23 @@ static u32 pcie_phy_up(const struct state *state)
     return BIT(27);
 }
 
+/*
+ * iBoot hands a cold J773g over with its AQC113 link trained. A post-M4 ANS power cycle drops the
+ * shared APCIe PHY, so give the desktop Ethernet port one bounded cold-start window to reach L0
+ * after its speed change. A timeout is diagnostic, not fatal: Linux may still retrain the link.
+ */
+static void pcie_t8132_wait_cold_ethernet(u64 port_base, u32 port)
+{
+    if (chip_id != T8132 || port != 2)
+        return;
+
+    if (poll32(port_base + APCIE_PORT_LINKSTS, APCIE_PORT_LINKSTS_UP, APCIE_PORT_LINKSTS_UP,
+               USEC_PER_SEC))
+        printf("pcie: T8132 port 2 link not up after cold-start window; leaving it for the OS\n");
+    else
+        printf("pcie: T8132 port 2 link up after cold-start wait\n");
+}
+
 /* With ans_off, only read the windows, stop the shared PHY and power ANS's gates off. */
 static int pcie_init_controller(int controller, const char *path, bool ans_off)
 {
@@ -1074,6 +1091,7 @@ static int pcie_init_controller(int controller, const char *path, bool ans_off)
                 write32(state->port_base[port] + APCIE_T602X_PORT_MSIMAP + 4 * i, 0x80000000 | i);
         }
 
+        pcie_t8132_wait_cold_ethernet(state->port_base[port], port);
         u32 link_status = read32(state->port_base[port] + APCIE_PORT_LINKSTS);
         if (state->pcie_regs->type == APCIE_T8140)
             printf("pcie: T8140 port %d ready, link status 0x%x\n", port, link_status);

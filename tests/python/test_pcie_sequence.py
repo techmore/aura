@@ -34,8 +34,10 @@ typedef uint64_t u64;
 #define GENMASK(h, l) ((BIT((h) + 1) - 1) & ~(BIT(l) - 1))
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define FIELD_PREP(f, v) (((v) * ((f) & -(f))) & (f))
+#define T8132 0x8132
 #define T8140 0x8140
 #define T6050 0x6050
+#define USEC_PER_SEC 1000000
 #define ADT_GETPROP(a, n, p, v) adt_getprop_copy(a, n, p, v, sizeof(*(v)))
 static void *adt;
 static int chip_id = T8140;
@@ -160,7 +162,7 @@ static void mask16(u64 addr, u16 mask, u16 val) { mask32(addr, mask, val); }
 static void udelay(int us) { if (!(phy_ctrl & 0x10)) reset_delay += us; }
 static int poll32(u64 addr, u32 mask, u32 target, int timeout)
 {
-    assert(timeout > 0 && timeout <= 250000);
+    assert(timeout > 0 && timeout <= 1000000);
     polls++;
     if (polls == fail_poll) return -1;
     if (addr == PHY || addr == PORT_PHY) return (read32(addr) & mask) != target;
@@ -259,6 +261,22 @@ int main(void)
     controller_compat = "apcie,t8132";
     fail_tunable = 1;
     assert(pcie_init() == -1 && pll == 1 && auspma == 0 && !port_run);
+    /* The J773g port-2 wait is one bounded, nonfatal poll and is not used on another port/chip. */
+    reset_model();
+    powered = 1;
+    chip_id = 0x8132;
+    pcie_t8132_wait_cold_ethernet(PORT, 2);
+    assert(polls == 1);
+    polls = 0;
+    fail_poll = 1;
+    pcie_t8132_wait_cold_ethernet(PORT, 2);
+    assert(polls == 1);
+    polls = fail_poll = 0;
+    pcie_t8132_wait_cold_ethernet(PORT, 0);
+    assert(polls == 0);
+    chip_id = T8140;
+    pcie_t8132_wait_cold_ethernet(PORT, 2);
+    assert(polls == 0);
     return 0;
 }
 '''
