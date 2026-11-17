@@ -62,9 +62,14 @@ static int publish_gpu_m4(void *dt)
     int gpu = fdt_path_offset(dt, "gpu");
     if (gpu < 0)
         return 0; /* A framebuffer-only DT needs no GPU handoff. */
-    /* The G16 handoff follows the 26.6.2 firmware, not the board; J713 as before. */
+    /*
+     * The G16 handoff follows the 26.6.2 firmware, not the board; J713 as before. The J773g
+     * also hands it off on any firmware its gate admits: the kernel identifies the loaded image
+     * before it uses any of it.
+     */
     if (chip_id != T8132 ||
-        (fdt_node_check_compatible(dt, 0, "apple,j713") && os_firmware.version != V26_6_2) ||
+        (fdt_node_check_compatible(dt, 0, "apple,j713") && os_firmware.version != V26_6_2 &&
+         !kboot_is_j773g(dt)) ||
         fdt_node_check_compatible(dt, gpu, "apple,agx-t8132"))
         return -1;
 
@@ -105,27 +110,53 @@ static int publish_gpu_m4(void *dt)
         if (read_range(sgx, properties[i], &ranges[i]))
             return -1;
 
-    u32 len;
+    /*
+     * iBoot loads the firmware before aura runs and names its segments in gfx-asc. The 25G83
+     * image (macOS 26.6.2) has __TEXT and __DATA. The 26B123 image (macOS 27.2) adds an 0x8000
+     * __DATA_SHARED_RO, which iBoot places right after __DATA, physically and in the firmware's
+     * address space. Reserve __DATA and __DATA_SHARED_RO as one data region, as the M5 path
+     * reserves its __DATA and shared-RO segments (g17_set_fw_data()); the kernel selects the
+     * image layout from the published addresses. Only TEXT and DATA have firmware VAs and flags
+     * the kernel checks: the shared-RO segment is covered by the data region.
+     */
+    static const char *const layouts[] = {"__TEXT;__DATA", "__TEXT;__DATA;__DATA_SHARED_RO"};
+    u32 len, count = 0;
     const char *names = adt_getprop(adt, asc, "segment-names", &len);
-    if (!names || len != sizeof("__TEXT;__DATA") || memcmp(names, "__TEXT;__DATA", len))
+    for (unsigned i = 0; names && i < sizeof(layouts) / sizeof(layouts[0]); i++)
+        if (len == strlen(layouts[i]) + 1 && !memcmp(names, layouts[i], len))
+            count = i + 2;
+    if (!count)
         return -1;
     const struct adt_segment_ranges *segments = adt_getprop(adt, asc, "segment-ranges", &len);
-    if (!segments || len != 2 * sizeof(*segments))
+    if (!segments || len != count * sizeof(*segments))
         return -1;
 
     fdt64_t vas[2];
     fdt32_t flags[2];
-    for (unsigned i = 0; i < 2; i++) {
-        ranges[4 + i] = (struct gpu_m4_range){segments[i].phys, segments[i].size};
-        if (!valid_range(ranges[4 + i]) || segments[i].remap != segments[i].phys ||
-            segments[i].unk != (i == 0 ? 1 : 0))
+    for (unsigned i = 0; i < count; i++) {
+        if (!valid_range((struct gpu_m4_range){segments[i].phys, segments[i].size}) ||
+            segments[i].remap != segments[i].phys ||
+            segments[i].iova + segments[i].size <= segments[i].iova)
+            return -1;
+        if (i && segments[i].iova != segments[i - 1].iova + segments[i - 1].size)
+            return -1;
+        if (i == 2) {
+            if (segments[i].phys != segments[i - 1].phys + segments[i - 1].size)
+                return -1;
+            continue;
+        }
+        if (segments[i].unk != (i == 0 ? 1 : 0))
             return -1;
         fdt64_st(&vas[i], segments[i].iova);
         flags[i] = cpu_to_fdt32(segments[i].unk);
     }
-    if (segments[0].iova != 0xfffffc0000000000 ||
-        segments[1].iova != segments[0].iova + segments[0].size ||
-        segments[1].iova + segments[1].size <= segments[1].iova)
+    if (segments[0].iova != 0xfffffc0000000000)
+        return -1;
+    ranges[4] = (struct gpu_m4_range){segments[0].phys, segments[0].size};
+    ranges[5] = (struct gpu_m4_range){segments[1].phys, segments[1].size};
+    if (count == 3)
+        ranges[5].size += segments[2].size;
+    if (!valid_range(ranges[5]))
         return -1;
 
     /* Boot addresses are observed, never copied from one successful boot. */
@@ -155,6 +186,9 @@ static int publish_gpu_m4(void *dt)
         fdt_setprop(dt, gpu, "apple,firmware-segment-flags", flags, sizeof(flags)) ||
         fdt_setprop_u32(dt, gpu, "apple,g16-handoff-version", 1))
         return -1;
+    if (count == 3)
+        printf("FDT: GPU: M4 G16 __DATA_SHARED_RO (flag %u) reserved with __DATA: 0x%lx+0x%lx\n",
+               segments[2].unk, ranges[5].base, ranges[5].size);
     printf("FDT: GPU: published M4 G16 memory resources without starting the GPU\n");
     return 0;
 }

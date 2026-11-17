@@ -19,13 +19,15 @@ typedef uint64_t u64;
 typedef uint32_t u32;
 #define T8132 0x8132
 #define SZ_16K 0x4000
-enum { V26_6, V26_6_2 };
+enum { V26_6, V26_6_2, V27_0, V27_2 };
 static struct { int version; } os_firmware;
 struct adt_segment_ranges { u64 phys, iova, remap; u32 size, unk; };
 static void *adt;
 static unsigned chip_id = T8132;
 static int fault;
-static struct adt_segment_ranges segs[2];
+static struct adt_segment_ranges segs[3];
+static unsigned nsegs = 2, segs_len = 2;
+static const char *seg_names = "__TEXT;__DATA";
 static u64 bases[4], sizes[4];
 static u32 irqs[4];
 static int adt_path_offset_trace(void *a, const char *p, int *trace)
@@ -41,8 +43,8 @@ static const void *adt_getprop(void *a, int n, const char *p, u32 *len)
 {
     const char *names[] = {"gpu-region", "gfx-shared-region", "gfx-handoff", "gfx-shared-l2-region"};
     if (!strcmp(p, "interrupts")) { *len = sizeof(irqs); return irqs; }
-    if (!strcmp(p, "segment-names")) { *len = sizeof("__TEXT;__DATA"); return "__TEXT;__DATA"; }
-    if (!strcmp(p, "segment-ranges")) { *len = sizeof(segs); return segs; }
+    if (!strcmp(p, "segment-names")) { *len = strlen(seg_names) + 1; return seg_names; }
+    if (!strcmp(p, "segment-ranges")) { *len = segs_len * sizeof(segs[0]); return segs; }
     for (unsigned i = 0; i < 4; i++) {
         char prop[64];
         snprintf(prop, sizeof(prop), "%s-base", names[i]);
@@ -52,16 +54,35 @@ static const void *adt_getprop(void *a, int n, const char *p, u32 *len)
     }
     *len = 0; return NULL;
 }
+/* The J773g gate (kboot_t8132.c): a J773g tree on 26.6.2 or 27.2. */
+static bool kboot_is_j773g(const void *fdt)
+{
+    return !fdt_node_check_compatible(fdt, 0, "apple,j773g") &&
+           (os_firmware.version == V26_6_2 || os_firmware.version == V27_2);
+}
 ''' + production + r'''
 int main(void)
 {
     char blob[32768];
     const char *regions[] = {"uat-ttbs", "uat-pagetables", "uat-handoff", "uat-shared-l2", "gpu-fw-text", "gpu-fw-data"};
-    /* 13: another M4 Mac on 26.6.2 publishes; 14: the J713 on 26.6 still does. */
-    for (fault = 0; fault <= 14; fault++) {
-        os_firmware.version = fault == 14 ? V26_6 : V26_6_2;
+    /*
+     * 13: another M4 Mac on 26.6.2 publishes; 14: the J713 on 26.6 still does.
+     * 15: the J773g on 27.2 with the 26B123 three-segment layout publishes, __DATA and
+     * __DATA_SHARED_RO as one data region; 16: the J773g on 26.6.2 with two segments does.
+     * Refused: 17 the J773g on 27.0 (its gate refuses), 18 a shared-RO segment placed apart
+     * physically, 19 or in firmware VA, 20 three names with two ranges, 21 two names with three
+     * ranges, 22 an unknown third segment, 23 a misaligned shared-RO size, 24 a J773g DATA flag
+     * other than 0 with three segments, 25 another M4 Mac on 27.2.
+     */
+    for (fault = 0; fault <= 25; fault++) {
+        bool three = fault == 15 || (fault >= 18 && fault <= 24 && fault != 21);
+        bool publish = !fault || fault == 13 || fault == 14 || fault == 15 || fault == 16;
+        const char *board = fault == 13 ? "apple,j604" : fault == 25 ? "apple,j604" :
+                            fault >= 15 ? "apple,j773g" : "apple,j713";
+        os_firmware.version = fault == 14 ? V26_6 : fault == 17 ? V27_0 :
+                              (fault == 15 || fault >= 18) ? V27_2 : V26_6_2;
         assert(!fdt_create_empty_tree(blob, sizeof(blob)));
-        assert(!fdt_setprop_string(blob, 0, "compatible", fault == 13 ? "apple,j604" : "apple,j713"));
+        assert(!fdt_setprop_string(blob, 0, "compatible", board));
         int gpu = fdt_add_subnode(blob, 0, "gpu"); assert(gpu >= 0);
         assert(!fdt_setprop_string(blob, gpu, "compatible", "apple,agx-t8132"));
         assert(!fdt_setprop_u32(blob, gpu, "apple,g16-handoff-version", 99));
@@ -78,6 +99,9 @@ int main(void)
         }
         segs[0] = (struct adt_segment_ranges){0x800400000, 0xfffffc0000000000, 0x800400000, 0x4000, 1};
         segs[1] = (struct adt_segment_ranges){0x800500000, 0xfffffc0000004000, 0x800500000, 0x8000, 0};
+        segs[2] = (struct adt_segment_ranges){0x800508000, 0xfffffc000000c000, 0x800508000, 0x8000, 1};
+        nsegs = segs_len = three || fault == 21 ? 3 : 2;
+        seg_names = three ? "__TEXT;__DATA;__DATA_SHARED_RO" : "__TEXT;__DATA";
         irqs[0] = 994; irqs[1] = 993; irqs[2] = 996; irqs[3] = 995;
         if (fault == 2) irqs[0]++;
         if (fault == 3) bases[1] = bases[0];
@@ -94,6 +118,12 @@ int main(void)
             gpu = fdt_path_offset(blob, "/gpu");
             assert(!fdt_setprop_string(blob, gpu, "compatible", "apple,unsupported-gpu"));
         }
+        if (fault == 18) segs[2].phys = segs[2].remap = 0x80050c000;
+        if (fault == 19) segs[2].iova += 0x4000;
+        if (fault == 20) segs_len = 2;
+        if (fault == 22) seg_names = "__TEXT;__DATA;__OS_LOG";
+        if (fault == 23) segs[2].size = 0x2000;
+        if (fault == 24) segs[1].unk = 1;
         int result = dt_set_gpu_m4(blob);
         fb = fdt_path_offset(blob, "/framebuffer");
         const char *fb_status = fdt_getprop(blob, fb, "status", NULL);
@@ -101,8 +131,9 @@ int main(void)
         gpu = fdt_path_offset(blob, "/gpu");
         int len;
         const fdt32_t *version = fdt_getprop(blob, gpu, "apple,g16-handoff-version", &len);
-        if (fault && fault < 13) {
+        if (!publish) {
             assert(!result && !version && !fdt_num_mem_rsv(blob));
+            assert(!fdt_getprop(blob, gpu, "apple,firmware-segment-vas", NULL));
             const char *status = fdt_getprop(blob, gpu, "status", NULL);
             assert(status && !strcmp(status, "disabled"));
         } else {
@@ -113,13 +144,21 @@ int main(void)
                 int node = fdt_path_offset(blob, path); assert(node >= 0);
                 assert(fdt_getprop(blob, node, "no-map", &len) && !len);
                 const fdt64_t *reg = fdt_getprop(blob, node, "reg", &len); assert(reg && len == 16);
+                u64 size = i < 4 ? sizes[i] : segs[i - 4].size;
+                if (i == 5 && nsegs == 3) size += segs[2].size;
                 assert(fdt64_to_cpu(reg[0]) == (i < 4 ? bases[i] : segs[i - 4].phys));
-                assert(fdt64_to_cpu(reg[1]) == (i < 4 ? sizes[i] : segs[i - 4].size));
+                assert(fdt64_to_cpu(reg[1]) == size);
             }
+            /* Only TEXT and DATA have published VAs and flags, whatever the layout. */
+            const fdt64_t *vas = fdt_getprop(blob, gpu, "apple,firmware-segment-vas", &len);
+            assert(vas && len == 16 && fdt64_to_cpu(vas[0]) == segs[0].iova &&
+                   fdt64_to_cpu(vas[1]) == segs[1].iova);
+            const fdt32_t *flags = fdt_getprop(blob, gpu, "apple,firmware-segment-flags", &len);
+            assert(flags && len == 8 && fdt32_to_cpu(flags[0]) == 1 && fdt32_to_cpu(flags[1]) == 0);
             assert(!dt_set_gpu_m4(blob) && fdt_num_mem_rsv(blob) == 6);
         }
     }
-    puts("M4 live resources, repeat publication and malformed/overlapping carveouts PASS");
+    puts("M4 live resources (25G83 and 26B123 layouts), repeat publication and malformed/overlapping carveouts PASS");
     return 0;
 }
 '''
