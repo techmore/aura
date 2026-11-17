@@ -71,7 +71,7 @@ typedef uint8_t u8;
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
 enum fw_version { V12_3, V12_3_1, V12_4, V13_5B4, V13_5, V13_6_1, V14_7, V26_5, V26_6, V26_6_2,
-                  V27_0 };
+                  V27_0, V27_2 };
 struct fw_version_info {
     enum fw_version version;
     const char *string;
@@ -87,6 +87,7 @@ static const struct fw_version_info fw_versions[] = {
     [V26_6] = {V26_6, "26.6", {26, 6, 0}, 3, ""},
     [V26_6_2] = {V26_6_2, "26.6.2", {26, 6, 2}, 3, ""},
     [V27_0] = {V27_0, "27.0", {27, 0, 0}, 2, ""},
+    [V27_2] = {V27_2, "27.2", {27, 2, 0}, 2, ""},
 };
 static struct fw_version_info os_firmware;
 ''' + layout + r'''
@@ -224,7 +225,8 @@ static int dart_walk_locked_t8110(uintptr_t base, u64 size, u8 sid, u64 dram_sta
 }
 static bool kboot_is_j773g(const void *tree)
 {
-    return tree && !strcmp(b.name, "j773g") && os_firmware.version == V26_6_2;
+    return tree && !strcmp(b.name, "j773g") &&
+           (os_firmware.version == V26_6_2 || os_firmware.version == V27_2);
 }
 ''' + production + r'''
 static unsigned char blob[1 << 16];
@@ -466,7 +468,7 @@ int main(int argc, char **argv)
     handed_over(&imac, V26_6_2, false);
 
     /* Any other firmware: nothing, as before. */
-    const enum fw_version others[] = {V26_5, V26_6, V27_0, V14_7};
+    const enum fw_version others[] = {V26_5, V26_6, V27_0, V27_2, V14_7};
     const struct board *panels[] = {&j604, &j715, &imac};
     for (unsigned i = 0; i < ARRAY_SIZE(others); i++)
         for (unsigned k = 0; k < ARRAY_SIZE(panels); k++) {
@@ -476,6 +478,8 @@ int main(int argc, char **argv)
 
     /* The Mac mini's main DCP is an external HDMI pipeline; other panel-less boards refuse. */
     handed_over(&j773g, V26_6_2, false);
+    /* The same on the 27.2 stub, which the J773g gate admits. */
+    handed_over(&j773g, V27_2, false);
     /* Still scanning out of /vram: the same publication. */
     j773g_scanout = true;
     handed_over(&j773g, V26_6_2, false);
@@ -494,6 +498,7 @@ int main(int argc, char **argv)
     assert(!fdt_delprop(dt, fdt_path_offset(dt, "dcp"), "apple,connector-type"));
     refused();
     world(&j773g, V26_6); refused();
+    world(&j773g, V27_0); refused();
     struct board bare = j604;
     bare.external = -1;
     world(&bare, V26_6_2); refused();

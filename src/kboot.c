@@ -8320,8 +8320,9 @@ static int dt_set_j773g_display_maps(unsigned int unused)
 /*
  * Publish the inherited DCP firmware mapping without starting a display driver: on the J713
  * on any firmware as before, on any other M4 Mac with a panel on 26.6.2, and on the J773g
- * whose main DCP drives the HDMI port. Only the DT changes: J713 and panel paths read the live
- * DART tables, the J773g path does not touch them, and none of the paths write them.
+ * (on any firmware its gate admits) whose main DCP drives the HDMI port. Only the DT changes:
+ * J713 and panel paths read the live DART tables, the J773g path does not touch them, and none
+ * of the paths write them.
  */
 static int dt_set_m4_dcp_handoff(void)
 {
@@ -8329,7 +8330,7 @@ static int dt_set_m4_dcp_handoff(void)
     if (dcp_node < 0)
         return 0; /* Older DT with simple-framebuffer only. */
     bool j713 = !fdt_node_check_compatible(dt, 0, "apple,j713");
-    if (chip_id != T8132 || (!j713 && os_firmware.version != V26_6_2) ||
+    if (chip_id != T8132 || (!j713 && os_firmware.version != V26_6_2 && !kboot_is_j773g(dt)) ||
         fdt_node_check_compatible(dt, dcp_node, "apple,t8132-dcp"))
         bail("FDT: unsupported native DCP handoff target\n");
     /*
