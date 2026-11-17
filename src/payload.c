@@ -531,7 +531,9 @@ int payload_run(void)
          * on if this stage used it.
          */
         bool nvme_started = !boot_spec && nvme_post_m4_passed_off();
-        if (nvme_started && !nvme_init())
+        bool nvme_takeover =
+            !boot_spec && kboot_is_j773g_machine() && nvme_post_m4_untouched();
+        if ((nvme_started || nvme_takeover) && !nvme_init())
             goto boot_failed;
         nvme_keep_running_for_linux = boot_spec || nvme_started;
         if (!nvme_keep_running_for_linux && !nvme_shutdown())

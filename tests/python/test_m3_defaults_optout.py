@@ -267,6 +267,8 @@ static bool nvme_post_m4_passed_off(void)
 {
     return getenv("M1N1_TEST_POST_M4") && nvme_sart_passed && !nvme_started;
 }
+static bool kboot_is_j773g_machine(void) { return false; }
+static bool nvme_post_m4_untouched(void) { return false; }
 static int display_configure(const char *s) { printf("DISPLAY %s\n", s); return 0; }
 static int display_configure_second(const char *s) { printf("DISPLAY2 %s\n", s); return 0; }
 #define T8132 0x8132
