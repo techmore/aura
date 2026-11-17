@@ -54,6 +54,11 @@ static const void *adt_getprop(void *a, int n, const char *p, u32 *len)
     }
     *len = 0; return NULL;
 }
+/* TEST ONLY (H4 print): no firmware page tables in the fixture; every read returns 0. */
+enum { GUARD_OFF, GUARD_MARK = 2, GUARD_SILENT = 0x100 };
+static volatile int exc_guard, exc_count;
+static u64 read64(u64 addr) { (void)addr; return 0; }
+#define sysop(op) do { } while (0)
 /* The J773g gate (kboot_t8132.c): a J773g tree on 26.6.2 or 27.2. */
 static bool kboot_is_j773g(const void *fdt)
 {

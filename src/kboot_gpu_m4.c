@@ -2,6 +2,7 @@
 
 #include "kboot.h"
 #include "adt.h"
+#include "exception.h"
 #include "firmware.h"
 #include "soc.h"
 #include "utils.h"
@@ -55,6 +56,89 @@ static int reserve_range(void *dt, struct gpu_m4_range range)
             return 0;
     }
     return fdt_add_mem_rsv(dt, range.base, range.size);
+}
+
+/*
+ * TEST ONLY, never sent: capture H4 of aurora/outbox/27.2/GPU-DCP-27.2-PLAN.md. Prints gfx-asc's
+ * segment-ranges and the leaves of iBoot's firmware page tables (root at the start of the ADT
+ * gpu-region) over the firmware's address space, as runs of contiguous pages with the same
+ * attribute bits. Read-only: every load is in the gpu-region reservation and fault-guarded.
+ */
+#define G16_TEST_PA_MASK 0x3ffffffc000ULL
+
+static bool g16_test_table(struct gpu_m4_range tables, u64 pa)
+{
+    return !(pa & (SZ_16K - 1)) && pa >= tables.base && pa + SZ_16K <= tables.base + tables.size;
+}
+
+static u64 g16_test_read(u64 pa, bool *ok)
+{
+    int before = exc_count;
+    exc_guard = GUARD_MARK | GUARD_SILENT;
+    u64 value = read64(pa);
+    sysop("dsb sy");
+    sysop("isb");
+    exc_guard = GUARD_OFF;
+    if (exc_count != before)
+        *ok = false;
+    return value;
+}
+
+static void g16_test_print_run(u64 start, u64 end, u64 pa, u64 attr)
+{
+    if (!pa && !attr)
+        printf("TEST-ONLY G16 H4: UAT +0x%06lx..+0x%06lx unmapped\n", start, end);
+    else
+        printf("TEST-ONLY G16 H4: UAT +0x%06lx..+0x%06lx pa 0x%lx attr 0x%016lx\n", start, end, pa,
+               attr);
+}
+
+static void g16_test_print_segments(const struct adt_segment_ranges *seg, u32 count,
+                                    struct gpu_m4_range tables)
+{
+    u64 span = 0;
+    for (u32 i = 0; i < count; i++) {
+        printf("TEST-ONLY G16 H4: seg%u phys 0x%lx iova 0x%lx remap 0x%lx size 0x%x unk 0x%x\n", i,
+               seg[i].phys, seg[i].iova, seg[i].remap, seg[i].size, seg[i].unk);
+        if (seg[i].iova >= 0xfffffc0000000000 &&
+            seg[i].iova - 0xfffffc0000000000 + seg[i].size > span)
+            span = seg[i].iova - 0xfffffc0000000000 + seg[i].size;
+    }
+    /* One page past the image, bounded to the one leaf table that maps it. */
+    span += SZ_16K;
+    if (span > 2048 * SZ_16K)
+        span = 2048 * SZ_16K;
+    printf("TEST-ONLY G16 H4: gpu-region 0x%lx+0x%lx\n", tables.base, tables.size);
+    bool ok = true;
+    u64 l0 = g16_test_read(tables.base, &ok);
+    u64 l1 = ok && g16_test_table(tables, l0 & G16_TEST_PA_MASK)
+                 ? g16_test_read(l0 & G16_TEST_PA_MASK, &ok)
+                 : 0;
+    printf("TEST-ONLY G16 H4: root[0] 0x%016lx l2[0] 0x%016lx%s\n", l0, l1, ok ? "" : " (fault)");
+    u64 leaf = l1 & G16_TEST_PA_MASK;
+    if (!ok || (l0 & 3) != 3 || (l1 & 3) != 3 || !g16_test_table(tables, leaf)) {
+        printf("TEST-ONLY G16 H4: no leaf table in gpu-region; not walking\n");
+        return;
+    }
+    u64 start = 0, run_pa = 0, run_attr = 0;
+    for (u64 off = 0; off < span; off += SZ_16K) {
+        u64 pte = g16_test_read(leaf + (off / SZ_16K) * 8, &ok);
+        if (!ok) {
+            printf("TEST-ONLY G16 H4: fault reading the leaf at +0x%lx\n", off);
+            return;
+        }
+        u64 pa = pte & G16_TEST_PA_MASK, attr = pte & ~G16_TEST_PA_MASK;
+        bool same =
+            off && attr == run_attr && (pte ? pa == run_pa + (off - start) : !run_pa && !run_attr);
+        if (same)
+            continue;
+        if (off)
+            g16_test_print_run(start, off, run_pa, run_attr);
+        start = off;
+        run_pa = pa;
+        run_attr = attr;
+    }
+    g16_test_print_run(start, span, run_pa, run_attr);
 }
 
 static int publish_gpu_m4(void *dt)
@@ -130,6 +214,7 @@ static int publish_gpu_m4(void *dt)
     const struct adt_segment_ranges *segments = adt_getprop(adt, asc, "segment-ranges", &len);
     if (!segments || len != count * sizeof(*segments))
         return -1;
+    g16_test_print_segments(segments, count, ranges[0]); /* TEST ONLY: capture H4 */
 
     fdt64_t vas[2];
     fdt32_t flags[2];
