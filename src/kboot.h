@@ -35,7 +35,7 @@ int kboot_boot(void *kernel);
 /* Reserve the DMA a USB controller that could not be stopped keeps (main.c, after USB shutdown). */
 int kboot_reserve_usb_dma(void);
 
-/* True only when the live J773g on 26.6.2 boots an OS tree that describes it. */
+/* True only when a live J773g on 26.6.2 or 27.2 boots an OS tree that describes it. */
 bool kboot_is_j773g(const void *fdt);
 
 /* Disable the ISP and the DARTs only it uses on a T8132 Mac whose ADT has no camera. */

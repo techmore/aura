@@ -10,14 +10,14 @@ def test_j773g_board_gate(tmp_path):
     repo = Path(__file__).resolve().parents[2]
     production = block((repo / "src/kboot_t8132.c").read_text(), "bool kboot_is_j773g(")
     # Each case breaks one fact used by the J773g gate: target J773gAP, board-id 42, chip-id
-    # 0x8132, OS firmware 26.6.2, or the OS tree.
+    # 0x8132, OS firmware 26.6.2 or 27.2, or the OS tree.
     harness = r'''
 #include <assert.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 #define T8132 0x8132
-enum fw_version { V_UNKNOWN, V26_6, V26_6_2, V26_7 };
+enum fw_version { V_UNKNOWN, V26_6, V26_6_2, V26_7, V27_0, V27_2, V27_3B };
 static struct { enum fw_version version; } os_firmware;
 static unsigned chip_id, board_id;
 static void *adt = (void *)1;
@@ -41,6 +41,7 @@ int main(void)
 {
     static char tree;
     j773g(); assert(kboot_is_j773g(&tree));
+    j773g(); os_firmware.version = V27_2; assert(kboot_is_j773g(&tree));
     assert(!kboot_is_j773g(NULL));
     j773g(); chip_id = 0x8122; assert(!kboot_is_j773g(&tree));
     j773g(); board_id = 0x2c; assert(!kboot_is_j773g(&tree));
@@ -49,6 +50,10 @@ int main(void)
     j773g(); soc = "apple,t8122"; assert(!kboot_is_j773g(&tree));
     j773g(); os_firmware.version = V26_6; assert(!kboot_is_j773g(&tree));
     j773g(); os_firmware.version = V26_7; assert(!kboot_is_j773g(&tree));
+    j773g(); os_firmware.version = V27_0; assert(!kboot_is_j773g(&tree));
+    j773g(); os_firmware.version = V27_3B; assert(!kboot_is_j773g(&tree));
+    j773g(); os_firmware.version = V27_2; board_id = 0x2c; assert(!kboot_is_j773g(&tree));
+    j773g(); os_firmware.version = V27_2; board = "apple,j713"; assert(!kboot_is_j773g(&tree));
     j773g(); os_firmware.version = V_UNKNOWN; assert(!kboot_is_j773g(&tree));
     return 0;
 }
