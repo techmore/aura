@@ -79,6 +79,15 @@ Without `--check`, the script then prints the kmutil command and asks you to typ
 `yes`. kmutil asks for the volume owner's password. bputil's output, kmutil's
 output and the result all go to the log, which stays on the FAT volume for later.
 
+The log is plain text on a removable volume. The script records only whether the
+confirmation was `yes`, never the text typed there. `script` records what kmutil
+prints, and so anything typed while kmutil echoes it, such as the user name and
+the `y`. Type the password only at kmutil's `Password:` prompt, which is not
+expected to echo; check the log after your first enrolment. bputil's output
+includes the ECID and the policy nonce hashes: remove them before sharing the
+log. Logs written by earlier versions of this script may contain what was typed
+at the confirmation prompt: delete old `enroll-stage1.log` files.
+
 To go back, run the script again with the kept image, adding `--raw` if it is
 raw.
 
