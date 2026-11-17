@@ -19,14 +19,16 @@
     } while (0)
 
 /*
- * J773g (Mac mini, M4): the J773g admissions in this tree were checked against one ADT, that
- * of 26.6.2 (target J773gAP, board-id 0x2a, iBoot mBoot-18000.161.10). Admit them only when
- * the live machine, its firmware and the OS tree all say J773g.
+ * J773g (Mac mini, M4): the J773g admissions in this tree were checked against the J773g ADTs
+ * of 26.6.2 (iBoot mBoot-18000.161.10) and 27.2 (26B123, iBoot mBoot-20457.41.3), both target
+ * J773gAP, board-id 0x2a. Admit them only when the live machine, its firmware and the OS tree
+ * all say J773g.
  */
 bool kboot_is_j773g(const void *fdt)
 {
     return fdt && chip_id == T8132 && board_id == 0x2a && adt_is_compatible(adt, 0, "J773gAP") &&
-           os_firmware.version == V26_6_2 && !fdt_node_check_compatible(fdt, 0, "apple,j773g") &&
+           (os_firmware.version == V26_6_2 || os_firmware.version == V27_2) &&
+           !fdt_node_check_compatible(fdt, 0, "apple,j773g") &&
            !fdt_node_check_compatible(fdt, 0, "apple,t8132");
 }
 
