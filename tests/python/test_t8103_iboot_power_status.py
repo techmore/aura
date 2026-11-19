@@ -96,7 +96,9 @@ _Static_assert(sizeof(u64) == 8 && sizeof(s64) == 8, "target LP64 integer sizes"
 #define FB_DEPTH_MASK 0xff
 #define FB_DEPTH_FLAG_RETINA 0x10000
 static u32 chip_id = T8103;
-typedef struct { void *dart_disp, *dart_dcp, *iovad_dcp, *dptx_ep; } dcp_dev_t;
+typedef struct { void *dart_disp, *dart_dcp, *iovad_dcp, *dptx_ep; bool no_reset; } dcp_dev_t;
+#define dcp_retained(x) ((x)->no_reset)
+static bool display_retained_used;
 typedef void afk_epic_ep_t;
 typedef struct dcp_iboot_if dcp_iboot_if_t;
 '''
@@ -171,6 +173,13 @@ static int display_start_dcp(void) { return 0; }
 static int dcp_connect_dptx(dcp_dev_t *d) { (void)d; assert(!"no DPTX on the internal panel"); return -1; }
 static int dcp_dptx_hpd(void *dptx, u32 port, bool hpd) { (void)dptx; (void)port; (void)hpd; assert(!"no DPTX on the internal panel"); return -1; }
 static int dcp_work(dcp_dev_t *d) { (void)d; return 0; }
+/* Only a DCP iBoot left running (no_reset) has mappings to drop; the panel's is not one. */
+__attribute__((unused)) static bool dart_unmap_checked(void *dart, u64 iova, u64 len)
+{
+    (void)dart; (void)iova; (void)len;
+    assert(!"no retained DCP on the internal panel");
+    return false;
+}
 static void mdelay(unsigned ms) { (void)ms; delays++; }
 static u64 get_ticks(void) { return 0; }
 static u64 ticks_to_msecs(u64 t) { return t; }

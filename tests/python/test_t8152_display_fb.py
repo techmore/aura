@@ -96,9 +96,17 @@ _Static_assert(sizeof(u64) == 8 && sizeof(s64) == 8, "target LP64 integer sizes"
 #define T6030 0x6030
 #define T8103 0x8103
 #define T8152 0x8152
+#define V26_6_2 2662
+#ifndef DCP_RETAINED
+#define DCP_RETAINED 1
+#endif
+#define dcp_retained(x) (DCP_RETAINED && (x)->no_reset)
 #define DART_PTR_ERR (1ULL << 63)
 #define DART_IS_ERR(v) (((v) >> 63) & 1)
 #define FB_DEPTH_MASK 0xff
+
+static u64 timeout_calculate(u64 delay) { return delay; }
+static bool timeout_expired(u64 timeout) { (void)timeout; return true; }
 #define FB_DEPTH_FLAG_RETINA 0x10000
 static u32 chip_id = T8152, board_id = 0x24;
 static bool is_j873g = true;
@@ -107,7 +115,7 @@ static bool is_j873g = true;
 struct mapping { u64 dva, pa, size; bool live; };
 struct fake_dart { struct mapping maps[16]; };
 typedef struct fake_dart dart_dev_t;
-typedef struct { dart_dev_t *dart_disp, *dart_dcp; void *iovad_dcp, *dptx_ep; } dcp_dev_t;
+typedef struct { dart_dev_t *dart_disp, *dart_dcp; void *iovad_dcp, *dptx_ep; bool no_reset; } dcp_dev_t;
 typedef void afk_epic_ep_t;
 typedef struct { int id; } dcp_iboot_if_t;
 struct boot_video { u64 base, display, stride, width, height, depth; };
@@ -169,6 +177,7 @@ static bool dart_unmap_checked(dart_dev_t *d, u64 iova, size_t size)
 }
 static bool dart_has_failed(dart_dev_t *d) { return !d; }
 static u64 dart_vm_base(dart_dev_t *d) { (void)d; return 0x10000000; }
+static u64 dart_dva_base(dart_dev_t *d) { (void)d; return 0; }
 static u64 dart_find_iova(dart_dev_t *d, s64 start, size_t size)
 {
     u64 dva = start;
@@ -446,6 +455,7 @@ static const struct { const char *name; void (*run)(void); } cases[] = {
 
 int main(int argc, char **argv)
 {
+    (void)display_config_t8132_hdmi;
     assert(argc == 2);
     if (!strcmp(argv[1], "--list")) {
         for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)

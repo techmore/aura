@@ -36,6 +36,8 @@ bool has_dcp;
 bool display_is_external;
 bool display_is_dptx;
 bool display_needs_power_cycle;
+/* The bring-up behind a DCP iBoot left running: admitted by display_init() alone, and once. */
+static bool display_retained_admitted, display_retained_used;
 
 static const display_config_t display_config_m1 = {
     .dcp = "/arm-io/dcp",
@@ -72,6 +74,23 @@ static const display_config_t display_config_j873_hdmi_ext = {
     .dcp_alias = "dcpext0",
     .dcp_index = 1,
     .num_dptxports = 2,
+};
+
+/* A T8132 Mac without a panel drives a fixed HDMI port from its main DCP, wired
+ * as on the J873g, but iBoot leaves that DCP running behind locked DARTs.
+ * display_t8132_hdmi() admits it from the ADT. */
+static const display_config_t display_config_t8132_hdmi = {
+    .dcp = "/arm-io/dcp",
+    .dcp_dart = "/arm-io/dart-dcp",
+    .disp_dart = "/arm-io/dart-disp0",
+    .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio0",
+    .dptx_phy = "/arm-io/dptx-phy",
+    .pmgr_dev = "DISP_CPU",
+    .dcp_alias = "dcp",
+    .dcp_index = 0,
+    .fw_version = V26_6_2,
+    .num_dptxports = 2,
+    .no_reset = true,
 };
 
 /* Config used by display_start_dcp(); the USB-C route keeps the base DCP. */
@@ -124,6 +143,7 @@ static const display_config_t display_config_m2 = {
     .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio",
     .dptx_phy = "/arm-io/dptx-phy",
     .num_dptxports = 2,
+    .fw_version = V13_5,
 };
 
 static const display_config_t display_config_m2_pro_max = {
@@ -146,6 +166,7 @@ static const display_config_t display_config_m2_pro_max = {
 #endif
     .dp2hdmi_gpio = "/arm-io/dp2hdmi-gpio0",
     .dptx_phy = "/arm-io/lpdptx-phy0",
+    .fw_version = V13_5,
 };
 
 static const display_config_t display_config_m2_ultra = {
@@ -159,6 +180,7 @@ static const display_config_t display_config_m2_ultra = {
     .dcp_index = 1,
     .num_dptxports = 2,
     .die = 1,
+    .fw_version = V13_5,
 };
 
 #define abs(x) ((x) >= 0 ? (x) : -(x))
@@ -262,6 +284,8 @@ int display_get_vram(u64 *paddr, u64 *size)
 /* True only when both DARTs dropped the range; otherwise keep its IOVA and memory. */
 static bool display_unmap_fb(uintptr_t iova, size_t size)
 {
+    if (dcp_retained(dcp))
+        iova &= (1ULL << 36) - 1;
     if (!dart_unmap_checked(dcp->dart_disp, iova, size))
         return false;
     return dart_unmap_checked(dcp->dart_dcp, iova, size);
@@ -309,6 +333,19 @@ static uintptr_t display_map_fb(uintptr_t iova, u64 paddr, u64 size)
         iova = iova_dcp;
     }
 
+    /* Both locked display DARTs must expose the same window. Their table
+     * operations use the low 36-bit IOVA; only the DVA sent to DCP carries
+     * the window bits. */
+    u64 dva_base = 0;
+    if (dcp_retained(dcp)) {
+        dva_base = dart_dva_base(dcp->dart_dcp);
+        if (dva_base != dart_dva_base(dcp->dart_disp)) {
+            printf("display: DCP and DISP DVA windows differ\n");
+            return DART_PTR_ERR;
+        }
+        iova &= (1ULL << 36) - 1;
+    }
+
     int ret = dart_map(dcp->dart_disp, iova, (void *)paddr, size);
     if (ret < 0) {
         printf("display: failed to map fb to dart-disp0\n");
@@ -322,7 +359,42 @@ static uintptr_t display_map_fb(uintptr_t iova, u64 paddr, u64 size)
         return DART_PTR_ERR;
     }
 
-    return iova;
+    return iova | dva_base;
+}
+
+/*
+ * Whether this loader can light the fixed HDMI port of a T8132 Mac itself. Read from the ADT:
+ * the main display is external (no panel), the DP-to-HDMI converter names both of its power
+ * rails, and the transmitter is a PHY this loader drives. Nothing is written here.
+ *
+ * One test is not a hardware property: os_firmware.version is an OS-version test. The DCP's
+ * dptx-port interface differs by firmware and no ADT property states it, so it is pinned to the
+ * one firmware it was run on (26.6.2), as dcp_init() pins the others to 13.5. Together the tests
+ * match one board on one OS today: the Mac mini (J773g) on 26.6.2. The chip test stays as well:
+ * the configuration's paths, power domain and no_reset handling are the T8132's, and without it
+ * any SoC whose ADT matched would run a bring-up never tried there.
+ *
+ * Never in a Stage 1 (DCP_RETAINED, dcp/dptx_phy.h).
+ */
+static bool display_t8132_hdmi(void)
+{
+    const display_config_t *conf = &display_config_t8132_hdmi;
+    if (!DCP_RETAINED || chip_id != T8132 || os_firmware.version != conf->fw_version)
+        return false;
+
+    int disp0 = adt_path_offset(adt, "/arm-io/disp0");
+    int phy = adt_path_offset(adt, conf->dptx_phy);
+    int conv = adt_path_offset(adt, conf->dp2hdmi_gpio);
+    return disp0 >= 0 && adt_getprop(adt, disp0, "external", NULL) && phy >= 0 &&
+           adt_is_compatible(adt, phy, "dptx-phy,t8122") && conv >= 0 &&
+           adt_getprop(adt, conv, "function-hdmi_pwr_en", NULL) &&
+           adt_getprop(adt, conv, "function-dp2hdmi_pwr_en", NULL);
+}
+
+/* iBoot lit no display: it handed over only its 640x1136 placeholder framebuffer. */
+static bool display_fb_is_placeholder(void)
+{
+    return cur_boot_args.video.width == 640 && cur_boot_args.video.height == 1136;
 }
 
 const display_config_t *display_get_config(void)
@@ -335,6 +407,8 @@ const display_config_t *display_get_config(void)
         conf = &display_config_m2_pro_max;
     else if (adt_is_compatible(adt, 0, "J180dAP") || adt_is_compatible(adt, 0, "J475dAP"))
         conf = &display_config_m2_ultra;
+    else if (display_t8132_hdmi())
+        conf = &display_config_t8132_hdmi;
     else if (chip_id == T8152)
         conf = t8152_config;
     else
@@ -350,13 +424,12 @@ const display_config_t *display_get_config(void)
 
 /*
  * Whether this stage or an earlier one may have mapped into the inherited tables
- * of a locked display DART (dart_init_adt_display()). T8140 and T8132 never get
- * that far: display_init() returns before any DCP or DART work on them, in every
- * stage, and kboot keeps their retained heap separately.
+ * of a locked display DART (dart_init_adt_display()). T8140 never gets that far,
+ * and T8132 only where a stage may light the HDMI port (display_t8132_hdmi()).
  */
 bool display_dart_tables_inherited(void)
 {
-    if (chip_id == T8140 || chip_id == T8132)
+    if (chip_id == T8140 || (chip_id == T8132 && !display_t8132_hdmi()))
         return false;
 
     const display_config_t *conf = display_get_config();
@@ -401,6 +474,12 @@ int display_start_dcp(void)
         return -1;
     }
 
+    /* display=, the proxy and the hypervisor get here without display_init()'s bounds. */
+    if (dcp_retained(disp_cfg) && !display_retained_admitted) {
+        printf("display: a DCP iBoot left running is only started by display_init()\n");
+        return -1;
+    }
+
     display_is_dptx = !!disp_cfg->dptx_phy[0];
 
     dcp = dcp_init(disp_cfg);
@@ -425,6 +504,16 @@ int display_start_dcp(void)
     // Find the framebuffer DVA
     fb_dva_allocated = false;
     fb_dva = dart_search(dcp->dart_disp, (void *)cur_boot_args.video.base);
+    if (dcp_retained(dcp) && !DART_IS_ERR(fb_dva) && fb_dva) {
+        u64 dcp_base = dart_dva_base(dcp->dart_dcp);
+        u64 disp_base = dart_dva_base(dcp->dart_disp);
+        if (dcp_base != disp_base) {
+            printf("display: DCP and DISP DVA windows differ\n");
+            fb_dva = DART_PTR_ERR;
+        } else {
+            fb_dva = (fb_dva & ((1ULL << 36) - 1)) | dcp_base;
+        }
+    }
     // framebuffer is not mapped on the M1 Ultra Mac Studio
     if (DART_IS_ERR(fb_dva) || !fb_dva)
         fb_dva = display_map_fb(0, pa, size);
@@ -538,16 +627,37 @@ int display_configure(const char *config)
     if (ret < 0)
         return ret;
 
+    /* Behind a DCP iBoot left running there is one modeset per boot, display_init()'s: a later
+     * one (display=, the proxy) would run unbounded on a framebuffer the DCP no longer maps. */
+    if (dcp_retained(dcp)) {
+        if (display_retained_used) {
+            printf("display: one modeset only behind a DCP iBoot left running\n");
+            return -1;
+        }
+        display_retained_used = true;
+    }
+
     // connect dptx if necessary
     if (display_is_dptx) {
         ret = dcp_connect_dptx(dcp);
         if (ret < 0)
             return ret;
-        /* The T8152 DCP only brings the port up once HPD is asserted. On the
-         * J873g HDMI path the sink's HPD reaches the AP gpio, so tell the
-         * firmware. */
-        if (chip_id == T8152)
-            dcp_dptx_hpd(dcp->dptx_ep, 0, true);
+        /* Fixed HDMI only trains after its AP-side HPD is forwarded to DCP.
+         * Firmware iBoot left running can consume the first assertion while
+         * its display client is still opening, so replay high after 20 ms
+         * just as the working Linux path does. */
+        if (chip_id == T8152) {
+            /* Preserve the established J873g best-effort HPD behavior. */
+            (void)dcp_dptx_hpd(dcp->dptx_ep, 0, true);
+        } else if (dcp_retained(dcp)) {
+            ret = dcp_dptx_hpd(dcp->dptx_ep, 0, true);
+            if (ret < 0)
+                return ret;
+            mdelay(20);
+            ret = dcp_dptx_hpd(dcp->dptx_ep, 0, true);
+            if (ret < 0)
+                return ret;
+        }
     }
 
     if (!display_is_external) {
@@ -567,9 +677,11 @@ int display_configure(const char *config)
     int hpd = 0, retries = 0;
 
     /* After boot DCP does not immediately report a connected display. Retry getting display
-     * information for 2 seconds.
+     * information for 2 seconds (10 for DPTX, 15 behind a DCP iBoot left running: a fixed
+     * HDMI sink took 8 there).
      */
-    while (retries++ < (DISPLAY_STATUS_RETRIES(display_is_dptx))) {
+    int status_retries = dcp_retained(dcp) ? 150 : DISPLAY_STATUS_RETRIES(display_is_dptx);
+    while (retries++ < status_retries) {
         dcp_work(dcp);
         hpd = dcp_ib_get_hpd(iboot, &timing_cnt, &color_cnt);
         /* Only the latest status query decides; the power requests above are
@@ -577,7 +689,8 @@ int display_configure(const char *config)
         ret = hpd < 0 ? hpd : 0;
         if (hpd > 0 && timing_cnt && color_cnt)
             break;
-        if (retries < DISPLAY_STATUS_RETRIES(display_is_dptx))
+        /* Service DCP once per retry above, then yield for the fixed interval. */
+        if (retries < status_retries)
             mdelay(DISPLAY_STATUS_DELAY);
     }
     printf("display: waited %d ms for display status\n", (retries - 1) * DISPLAY_STATUS_DELAY);
@@ -758,8 +871,10 @@ int display_configure(const char *config)
     /* The temporary IOVA aliases the live framebuffer. Free it only once both
      * DARTs confirmed the unmap; otherwise keep it reserved. */
     if (tmp_dva) {
+        /* The allocator's address has no window bits; the DVA a retained DCP was given has. */
+        u64 tmp_iova = dcp_retained(dcp) ? tmp_dva & ((1ULL << 36) - 1) : tmp_dva;
         if (display_unmap_fb(tmp_dva, size))
-            iova_free(dcp->iovad_dcp, tmp_dva, size);
+            iova_free(dcp->iovad_dcp, tmp_iova, size);
         else
             printf("display: keeping the temporary framebuffer IOVA mapped\n");
     }
@@ -958,6 +1073,16 @@ static bool display_internal_panel_absent(int node, int product)
     return !adt_getprop(adt, product, "raw-panel-serial-number", NULL);
 }
 
+/* The one entry to the HDMI bring-up behind a DCP iBoot left running. */
+static int display_init_retained_hdmi(void)
+{
+    printf("display: HDMI port left dark by iBoot, initializing display\n");
+    display_retained_admitted = true;
+    int ret = display_configure(NULL);
+    display_retained_admitted = false;
+    return ret;
+}
+
 int display_init(void)
 {
     if (chip_id == T8152) {
@@ -994,6 +1119,9 @@ int display_init(void)
         printf("display: Display is external\n");
     else
         printf("display: Display is internal\n");
+
+    if (display_is_external && display_fb_is_placeholder() && display_t8132_hdmi())
+        return display_init_retained_hdmi();
 
     if (chip_id == T8140 || chip_id == T8132 ||
         (chip_id == T6040 && board_id == 4 && adt_is_compatible(adt, 0, "J614sAP")) ||
@@ -1041,7 +1169,7 @@ int display_shutdown(dcp_shutdown_mode mode)
 {
     /* Linux owns the live J700/J713/J873 controllers. Keep the inherited ASC session
      * and scanout intact at both the Stage 1 and Linux boundaries. */
-    if (chip_id == T8140 || chip_id == T8132 || chip_id == T8152)
+    if (chip_id == T8140 || (chip_id == T8132 && !display_t8132_hdmi()) || chip_id == T8152)
         return 0;
 
     /* We have no DCP, so just exit */
@@ -1060,9 +1188,11 @@ int display_shutdown(dcp_shutdown_mode mode)
             case DCP_SLEEP_IF_EXTERNAL:
                 if (!display_is_external)
                     printf("display: Quiescing DCP (internal)\n");
+                else if (dcp_retained(dcp))
+                    printf("display: Quiescing DCP (external, no reset)\n");
                 else
                     printf("display: Sleeping DCP (external)\n");
-                dcp_shutdown(dcp, display_is_external);
+                dcp_shutdown(dcp, display_is_external && !dcp_retained(dcp));
                 break;
             case DCP_SLEEP:
                 printf("display: Sleeping DCP (unconditional)\n");

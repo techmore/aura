@@ -1,10 +1,15 @@
 # SPDX-License-Identifier: MIT
-"""T8140 and T8132 never reach the display DART view.
+"""Inherited-only chips never reach the display DART view, except a T8132 HDMI port left dark.
 
 display_init() is compiled verbatim from src/display.c with host stubs for
-everything it calls. On T8140 and T8132 it must return before the dummy
+everything it calls. On T8140 and a non-admitted T8132 it must return before the dummy
 framebuffer path, so neither display_configure() nor any DCP or DART work runs,
-even with the 640x1136 framebuffer that makes every other chip start the DCP.
+even with the 640x1136 framebuffer that makes every other chip start the DCP. The
+one T8132 exception is selected from the ADT (display_t8132_hdmi(), compiled
+verbatim too): an external disp0, a DP-to-HDMI converter naming both rails, a
+"dptx-phy,t8122" transmitter and the one firmware whose DCP port interface is
+known. Each of those is refused in turn when it is missing, and a framebuffer
+iBoot already lit is left alone.
 display_dart_tables_inherited() must then answer false without looking at a
 DART. A T6000 run is the positive control.
 """
@@ -36,9 +41,14 @@ typedef unsigned long u64; /* as in aura: printed as long */
 #define UNUSED(x) (void)(x)
 #define FB_DEPTH_FLAG_RETINA 0x10000
 %(chips)s
-enum fw_version { V15_0B1 = 1, V_UNKNOWN = 2 };
+enum fw_version { V15_0B1 = 1, V26_6_2, V27_2, V_UNKNOWN };
 #define FW_MAX V_UNKNOWN
-typedef struct { const char *dcp, *dcp_dart, *disp_dart; } display_config_t;
+/* DCP_RETAINED, verbatim from src/dcp/dptx_phy.h */
+%(stage_gate)s
+typedef struct {
+    const char *dcp, *dcp_dart, *disp_dart, *dp2hdmi_gpio, *dptx_phy;
+    u32 fw_version;
+} display_config_t;
 
 static u32 chip_id, board_id;
 static bool is_mac = true;
@@ -48,14 +58,32 @@ static struct { enum fw_version version; } os_firmware = {V15_0B1};
 static int dummy_adt;
 static void *adt = &dummy_adt;
 static unsigned configures, t8152_inits, dart_queries, config_queries, adt_queries;
+static unsigned admitted_configures;
+static bool display_retained_admitted;
+/* The ADT as far as the selection reads it. */
+enum { NODE_OTHER = 1, NODE_DISP0, NODE_PHY, NODE_CONV };
+static bool adt_external, adt_has_phy, adt_has_conv, adt_hdmi_rail, adt_dp2hdmi_rail;
+static const char *adt_phy_compat;
 
 static bool adt_is_compatible(void *tree, int node, const char *compat)
 {
-    (void)tree; (void)node; (void)compat;
+    (void)tree;
+    assert(node >= 0); /* a missing node is never read */
     adt_queries++;
-    return false;
+    return node == NODE_PHY && !strcmp(compat, adt_phy_compat);
 }
-static int adt_path_offset(void *tree, const char *path) { (void)tree; (void)path; adt_queries++; return 1; }
+static int adt_path_offset(void *tree, const char *path)
+{
+    (void)tree;
+    adt_queries++;
+    if (!strcmp(path, "/arm-io/disp0"))
+        return NODE_DISP0;
+    if (!strcmp(path, "/arm-io/dptx-phy"))
+        return adt_has_phy ? NODE_PHY : -1;
+    if (!strcmp(path, "/arm-io/dp2hdmi-gpio0"))
+        return adt_has_conv ? NODE_CONV : -1;
+    return NODE_OTHER;
+}
 static int adt_getprop_copy(void *tree, int node, const char *name, void *out, size_t len)
 {
     (void)tree; (void)node; (void)name;
@@ -65,17 +93,33 @@ static int adt_getprop_copy(void *tree, int node, const char *name, void *out, s
 #define ADT_GETPROP(adt, node, name, val) adt_getprop_copy(adt, node, name, (val), sizeof(*(val)))
 static const void *adt_getprop(void *tree, int node, const char *name, u32 *len)
 {
-    (void)tree; (void)node; (void)name; (void)len;
+    (void)tree; (void)len;
+    assert(node >= 0);
+    if ((node == NODE_DISP0 && !strcmp(name, "external") && adt_external) ||
+        (node == NODE_CONV && !strcmp(name, "function-hdmi_pwr_en") && adt_hdmi_rail) ||
+        (node == NODE_CONV && !strcmp(name, "function-dp2hdmi_pwr_en") && adt_dp2hdmi_rail))
+        return "";
     return NULL;
 }
-static int display_configure(const char *config) { (void)config; configures++; return 0; }
+static int display_configure(const char *config)
+{
+    (void)config;
+    configures++;
+    admitted_configures += display_retained_admitted;
+    return 0;
+}
 static int display_init_t8152(void) { t8152_inits++; return 0; }
 static void fb_clear_direct(void) {}
 static bool firmware_sfw_in_range(enum fw_version lo, enum fw_version hi) { (void)lo; (void)hi; return false; }
-static const display_config_t m1 = {"/arm-io/dcp", "/arm-io/dart-dcp", "/arm-io/dart-disp0"};
+static const display_config_t m1 = {"/arm-io/dcp", "/arm-io/dart-dcp", "/arm-io/dart-disp0", "", "", 0};
+static const display_config_t display_config_t8132_hdmi = {
+    "/arm-io/dcp", "/arm-io/dart-dcp", "/arm-io/dart-disp0", "/arm-io/dp2hdmi-gpio0",
+    "/arm-io/dptx-phy", V26_6_2};
 static const display_config_t *display_get_config(void) { config_queries++; return &m1; }
 static bool dart_locked = true;
 static bool dart_adt_locked(const char *path, int instance) { (void)path; (void)instance; dart_queries++; return dart_locked; }
+
+%(selection)s
 
 %(display_init)s
 
@@ -89,10 +133,43 @@ static void boot(u32 chip)
     cur_boot_args.video.height = 1136;
     cur_boot_args.video.depth = 30;
     configures = t8152_inits = dart_queries = config_queries = adt_queries = 0;
+    admitted_configures = 0;
+    /* A Mac with a panel on other firmware: nothing of the HDMI selection matches. */
+    os_firmware.version = V15_0B1;
+    adt_external = adt_has_phy = adt_has_conv = adt_hdmi_rail = adt_dp2hdmi_rail = false;
+    adt_phy_compat = "dptx-phy,t8122";
+}
+
+/* A T8132 Mac whose ADT describes a fixed HDMI port this loader can light, left dark. */
+static void boot_hdmi(void)
+{
+    boot(T8132);
+    os_firmware.version = V26_6_2;
+    adt_external = adt_has_phy = adt_has_conv = adt_hdmi_rail = adt_dp2hdmi_rail = true;
+}
+
+/* Not selected: as any other T8132, no modeset and no look at a DART. */
+static void refused(const char *what)
+{
+    assert(display_init() == 0);
+    if (configures || display_dart_tables_inherited() || dart_queries || config_queries) {
+        printf("FAIL: selected although %%s\n", what);
+        assert(0);
+    }
 }
 
 int main(void)
 {
+#ifdef EXPECT_RETAINED
+    _Static_assert(DCP_RETAINED == 1, "an ESP Stage 2 has the bring-up");
+#endif
+#if !DCP_RETAINED
+    /* Built as a Stage 1: the same Mac is refused, whatever its ADT says. */
+    boot_hdmi();
+    refused("this is a Stage 1");
+    puts("PASS inherited-only display chips");
+    return 0;
+#endif
     static const u32 inherited_only[] = {T8140, T8132};
     for (unsigned i = 0; i < 2; i++) {
         boot(inherited_only[i]);
@@ -101,6 +178,50 @@ int main(void)
         assert(!display_dart_tables_inherited());
         assert(!dart_queries && !config_queries);
     }
+    boot_hdmi();
+    assert(display_init() == 0 && configures == 1);
+    /* Admitted for that one call only: no other entry can start this DCP. */
+    assert(admitted_configures == 1 && !display_retained_admitted);
+    assert(display_dart_tables_inherited() && dart_queries == 1 && config_queries == 1);
+
+    /* Every property is needed: take each away in turn. */
+    boot_hdmi();
+    chip_id = T8140;
+    refused("the chip is not T8132");
+    boot_hdmi();
+    adt_external = false;
+    refused("disp0 is not external (a panel)");
+    boot_hdmi();
+    adt_has_phy = false;
+    refused("the ADT has no DPTX PHY");
+    boot_hdmi();
+    adt_phy_compat = "dptx-phy,t8132"; /* as the 27.2 ADT names it */
+    refused("the PHY is not a dptx-phy,t8122");
+    boot_hdmi();
+    adt_has_conv = false;
+    refused("the ADT has no DP-to-HDMI converter");
+    boot_hdmi();
+    adt_hdmi_rail = false;
+    refused("the converter names no HDMI rail");
+    boot_hdmi();
+    adt_dp2hdmi_rail = false;
+    refused("the converter names no converter rail");
+    boot_hdmi();
+    os_firmware.version = V27_2;
+    refused("the firmware is another one");
+
+    /* iBoot lit the port: no modeset, though an earlier stage may have run one. */
+    boot_hdmi();
+    cur_boot_args.video.width = 1920;
+    cur_boot_args.video.height = 1080;
+    assert(display_init() == 0 && !configures);
+    assert(display_dart_tables_inherited() && dart_queries == 1);
+    boot_hdmi();
+    cur_boot_args.video.height = 1080;
+    assert(display_init() == 0 && !configures);
+    boot_hdmi();
+    cur_boot_args.video.width = 1920;
+    assert(display_init() == 0 && !configures);
     /* Positive control: the same dummy framebuffer starts the DCP on T6000,
      * and the inherited-table question goes to its display DARTs. */
     boot(T6000);
@@ -122,6 +243,12 @@ def test_t8140_t8132_return_before_the_dart_path(tmp_path):
                                  soc, re.M))
     panel = function(display, "static bool display_internal_panel_absent(")
     init = function(display, "int display_init(void)")
+    header = (SOURCE / "src/dcp/dptx_phy.h").read_text()
+    stage_gate = re.search(r"^#if defined\(CHAINLOADING\).*?^#endif$", header, re.M | re.S).group(0)
+    assert "DCP_RETAINED 0" in stage_gate and "DCP_RETAINED 1" in stage_gate
+    selection = (function(display, "static bool display_t8132_hdmi(void)") + "\n" +
+                 function(display, "static bool display_fb_is_placeholder(void)") + "\n" +
+                 function(display, "static int display_init_retained_hdmi(void)"))
     inherited = function(display, "bool display_dart_tables_inherited(void)")
     # The early return the PR cites, ahead of the dummy framebuffer path.
     early = init.index("if (chip_id == T8140 || chip_id == T8132 ||")
@@ -129,7 +256,7 @@ def test_t8140_t8132_return_before_the_dart_path(tmp_path):
     line = display[:display.index(init)].count("\n") + init[:early].count("\n") + 1
     print(f"display_init() returns early for T8140/T8132 at src/display.c:{line}")
     code = tmp_path / "inherited-only.c"
-    code.write_text(HARNESS % {"chips": chips, "display_init": panel + "\n" + init,
+    code.write_text(HARNESS % {"chips": chips, "stage_gate": stage_gate, "selection": selection, "display_init": panel + "\n" + init,
                                "inherited": inherited})
     binary = tmp_path / "inherited-only"
     compiled = subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-Wall", "-Wextra",
@@ -139,3 +266,20 @@ def test_t8140_t8132_return_before_the_dart_path(tmp_path):
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS inherited-only display chips" in result.stdout
+    # The same harness as a Stage 1 build: the selection is compiled out.
+    stage1 = tmp_path / "inherited-only-stage1"
+    compiled = subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-Wall", "-Wextra",
+                               "-Werror", "-Wno-unused-function", "-Wno-unused-variable", "-DCHAINLOADING", str(code),
+                               "-o", str(stage1)], capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    result = subprocess.run([str(stage1)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and "PASS" in result.stdout, result.stdout + result.stderr
+    # And as an ESP Stage 2 (CHAINLOADING with ESP_STAGE2): the whole run again, selection in.
+    esp = tmp_path / "inherited-only-esp"
+    compiled = subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-Wall", "-Wextra",
+                               "-Werror", "-Wno-unused-function", "-Wno-unused-variable", "-DCHAINLOADING", "-DESP_STAGE2",
+                               "-DEXPECT_RETAINED", str(code), "-o", str(esp)],
+                              capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    result = subprocess.run([str(esp)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and "PASS" in result.stdout, result.stdout + result.stderr
