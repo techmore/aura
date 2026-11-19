@@ -207,6 +207,8 @@ static void bring_up(void)
     assert(cur_boot_args.video.width == 1920 && cur_boot_args.video.height == 1080);
     assert(find_map(dcp->dart_disp, BOOT_DVA) && find_map(dcp->dart_disp, BOOT_DVA)->pa == cur_boot_args.video.base);
     assert(scanout == BOOT_DVA && "scanned out at the frontend's DVA");
+    /* The alias the swap needed is gone from the DCP's own DART; the frontend keeps its map. */
+    assert(!live_maps(dcp->dart_dcp) && live_maps(dcp->dart_disp) == 1);
 
     /* One modeset per boot: a second one (display=, the proxy) is refused before any request. */
     hpd_pokes = polls = 0;
