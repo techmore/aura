@@ -91,6 +91,9 @@ static const void *adt_getprop(void *tree, int node, const char *name, u32 *len)
     return NULL;
 }
 static int display_configure(const char *config) { (void)config; configures++; return 0; }
+static bool aura_trial_enabled(void) { return false; }
+static int wdt_arm_display(void) { return 0; }
+static void wdt_disable(void) {}
 static int display_init_t8152(void) { return 0; }
 static bool display_t8132_hdmi(void) { return false; }
 static int display_init_retained_hdmi(void) { assert(!"no HDMI port left dark here"); return -1; }

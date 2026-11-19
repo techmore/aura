@@ -91,6 +91,16 @@ static int wdt_arm(unsigned seconds)
     return 0;
 }
 
+/*
+ * A plain boot's Stage 2 runs with no watchdog: it disarms Stage 1's at its start. Where it lights
+ * an HDMI port itself (display.c), it talks to a DCP that iBoot left running; bound that with
+ * the primary watchdog. The caller disarms it when the bring-up returns.
+ */
+int wdt_arm_display(void)
+{
+    return wdt_arm(WDT_DISPLAY_SECONDS);
+}
+
 int wdt_arm_seconds(unsigned seconds)
 {
     if (chip_id != T8140 && chip_id != T6040)

@@ -5,6 +5,7 @@
 #include "display.h"
 #include "adt.h"
 #include "assert.h"
+#include "boot_options.h"
 #include "dcp.h"
 #include "dcp_iboot.h"
 #include "fb.h"
@@ -13,6 +14,7 @@
 #include "soc.h"
 #include "string.h"
 #include "utils.h"
+#include "wdt.h"
 #include "xnuboot.h"
 
 #include "dcp/dptx_phy.h"
@@ -1077,9 +1079,13 @@ static bool display_internal_panel_absent(int node, int product)
 static int display_init_retained_hdmi(void)
 {
     printf("display: HDMI port left dark by iBoot, initializing display\n");
+    /* A trial already runs under its own watchdog (wdt.c); keep that one armed. */
+    bool guarded = !aura_trial_enabled() && !wdt_arm_display();
     display_retained_admitted = true;
     int ret = display_configure(NULL);
     display_retained_admitted = false;
+    if (guarded)
+        wdt_disable();
     return ret;
 }
 

@@ -101,11 +101,17 @@ static const void *adt_getprop(void *tree, int node, const char *name, u32 *len)
         return "";
     return NULL;
 }
+static bool trial_running, wdt_armed;
+static unsigned wdt_events, armed_configures;
+static bool aura_trial_enabled(void) { return trial_running; }
+static int wdt_arm_display(void) { wdt_armed = true; wdt_events++; return 0; }
+static void wdt_disable(void) { wdt_armed = false; wdt_events++; }
 static int display_configure(const char *config)
 {
     (void)config;
     configures++;
     admitted_configures += display_retained_admitted;
+    armed_configures += wdt_armed;
     return 0;
 }
 static int display_init_t8152(void) { t8152_inits++; return 0; }
@@ -134,6 +140,8 @@ static void boot(u32 chip)
     cur_boot_args.video.depth = 30;
     configures = t8152_inits = dart_queries = config_queries = adt_queries = 0;
     admitted_configures = 0;
+    wdt_events = armed_configures = 0;
+    trial_running = wdt_armed = false;
     /* A Mac with a panel on other firmware: nothing of the HDMI selection matches. */
     os_firmware.version = V15_0B1;
     adt_external = adt_has_phy = adt_has_conv = adt_hdmi_rail = adt_dp2hdmi_rail = false;
@@ -174,7 +182,7 @@ int main(void)
     for (unsigned i = 0; i < 2; i++) {
         boot(inherited_only[i]);
         assert(display_init() == 0);
-        assert(!configures && !t8152_inits);
+        assert(!configures && !t8152_inits && !wdt_events);
         assert(!display_dart_tables_inherited());
         assert(!dart_queries && !config_queries);
     }
@@ -182,7 +190,13 @@ int main(void)
     assert(display_init() == 0 && configures == 1);
     /* Admitted for that one call only: no other entry can start this DCP. */
     assert(admitted_configures == 1 && !display_retained_admitted);
+    /* A plain boot bounds the HDMI bring-up with the watchdog, then disarms it. */
+    assert(armed_configures == 1 && wdt_events == 2 && !wdt_armed);
     assert(display_dart_tables_inherited() && dart_queries == 1 && config_queries == 1);
+    /* A trial runs under its own watchdog, which display_init() leaves armed. */
+    boot_hdmi();
+    trial_running = true;
+    assert(display_init() == 0 && configures == 1 && !wdt_events);
 
     /* Every property is needed: take each away in turn. */
     boot_hdmi();
