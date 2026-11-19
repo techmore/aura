@@ -127,7 +127,7 @@ bool rtkit_free_buffer(rtkit_dev_t *, struct rtkit_buffer *);
                       "int dart_map(", "bool dart_unmap_checked(", "void dart_unmap("):
         harness += function(dart, signature)
     for signature in ("bool rtkit_map(", "bool rtkit_unmap(", "bool rtkit_alloc_buffer(",
-                      "bool rtkit_free_buffer(", "void rtkit_free("):
+                      "bool rtkit_free_buffer(", "void rtkit_free(", "void rtkit_set_dva_base("):
         harness += function(rtkit, signature)
     harness += r'''
 int main(int argc, char **argv)
@@ -136,7 +136,10 @@ int main(int argc, char **argv)
     int mode = atoi(argv[1]);
     struct dart_params params = {.tlb_invalidate = dart_t8110_tlb_invalidate};
     dart_dev_t dart = {.regs = 0x1000, .device = 1, .params = &params};
-    rtkit_dev_t rtk = {.name = "test", .dart = &dart, .dva_base = 1ULL << 40};
+    rtkit_dev_t rtk = {.name = "test", .dart = &dart};
+    /* The window bits of a locked DART, as dcp_init() sets them from dart_dva_base(). */
+    rtkit_set_dva_base(&rtk, 1ULL << 40);
+    assert(rtk.dva_base == 1ULL << 40);
     struct rtkit_buffer *bfr = &rtk.syslog_bfr;
     if (mode == 3 || mode == 4 || mode == 5) {
         rtk.dart = NULL;
