@@ -72,10 +72,27 @@ static bool pmgr_protected_addr(uintptr_t addr);
  * that is already on keeps its word, including the auto bits the OS configured. */
 bool pmgr_keep_configured;
 
+/*
+ * A T8132 Mac whose main display is external (the ADT's disp0 says so; the M4 Mac mini): iBoot
+ * leaves the main DCP running with its CPU domain under automatic power management (ps
+ * 0x1000030f: AUTO_ENABLE, target active, idle), and a write to DISP_CPU is reported to fault
+ * (Pavel Shago's m1n1 bring-up of that Mac; not measured here). The DCP is only ever woken over
+ * RTKit, so its CPU domain is never powered, gated or reset from here. The chip test stays
+ * because the fault is reported for T8132 only.
+ */
+static bool pmgr_t8132_external_dcp_cpu(const struct pmgr_device *device)
+{
+    if (chip_id != T8132 || strncmp(device->name, "DISP_CPU", sizeof(device->name)))
+        return false;
+    int disp0 = adt_path_offset(adt, "/arm-io/disp0");
+    return disp0 >= 0 && adt_getprop(adt, disp0, "external", NULL);
+}
+
 static bool pmgr_protected_device(const struct pmgr_device *device)
 {
-    return chip_id == T8140 && (!strncmp(device->name, "DISP_CPU", sizeof(device->name)) ||
-                                !strncmp(device->name, "DISPEXT0_CPU", sizeof(device->name)));
+    return (chip_id == T8140 && (!strncmp(device->name, "DISP_CPU", sizeof(device->name)) ||
+                                 !strncmp(device->name, "DISPEXT0_CPU", sizeof(device->name)))) ||
+           pmgr_t8132_external_dcp_cpu(device);
 }
 
 static uintptr_t pmgr_get_psreg(u8 idx)
@@ -181,7 +198,7 @@ static uintptr_t pmgr_device_get_addr(u8 die, const struct pmgr_device *device)
 
 static bool pmgr_protected_addr(uintptr_t addr)
 {
-    if (chip_id != T8140 || !pmgr_devices)
+    if ((chip_id != T8140 && chip_id != T8132) || !pmgr_devices)
         return false;
     for (size_t i = 0; i < pmgr_devices_len; i++) {
         if (!pmgr_protected_device(&pmgr_devices[i]))
@@ -1051,7 +1068,8 @@ int pmgr_init(void)
             if ((device->flags & PMGR_FLAG_VIRTUAL))
                 continue;
 
-            if (pmgr_protected_device(device))
+            /* That DCP's parents are still checked, as before; DISP_CPU is not written. */
+            if (pmgr_protected_device(device) && !pmgr_t8132_external_dcp_cpu(device))
                 continue;
 
             uintptr_t addr = pmgr_device_get_addr(die, device);
