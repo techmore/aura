@@ -881,6 +881,18 @@ int display_configure(const char *config)
             printf("display: keeping the temporary framebuffer IOVA mapped\n");
     }
 
+    /*
+     * Behind a DCP iBoot left running, the display frontend (disp0) scans the framebuffer out;
+     * the DCP's own DART needs no alias of it. iBoot leaves none there, and an OS admits the
+     * DCP's DART only with its firmware segments mapped, so drop the alias the swap needed.
+     */
+    if (dcp_retained(dcp) && fb_dva) {
+        if (dart_unmap_checked(dcp->dart_dcp, fb_dva & ((1ULL << 36) - 1), fb_size))
+            printf("display: framebuffer unmapped from the DCP DART\n");
+        else
+            printf("display: framebuffer stays mapped in the DCP DART\n");
+    }
+
     u64 msecs = ticks_to_msecs(get_ticks() - start_time);
     printf("display: Modeset took %ld ms\n", msecs);
 
