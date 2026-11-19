@@ -3,7 +3,20 @@
 #ifndef DCP_DPTX_PHY_H
 #define DCP_DPTX_PHY_H
 
+#include "../../build/build_cfg.h"
+
 #include "../types.h"
+
+/*
+ * The HDMI bring-up behind a DCP iBoot left running, and the T8122 transmitter it needs, are not
+ * built into a Stage 1: until they have run on hardware in this form they stay in the stages
+ * that can be replaced without access to the Mac.
+ */
+#if defined(CHAINLOADING) && !defined(ESP_STAGE2)
+#define DCP_RETAINED 0
+#else
+#define DCP_RETAINED 1
+#endif
 
 typedef struct dptx_phy dptx_phy_t;
 
