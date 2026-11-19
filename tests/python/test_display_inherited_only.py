@@ -101,10 +101,35 @@ static const void *adt_getprop(void *tree, int node, const char *name, u32 *len)
         return "";
     return NULL;
 }
-static bool trial_running, wdt_armed;
+static bool trial_running, wdt_armed, wdt_broken;
 static unsigned wdt_events, armed_configures;
 static bool aura_trial_enabled(void) { return trial_running; }
-static int wdt_arm_display(void) { wdt_armed = true; wdt_events++; return 0; }
+static int wdt_arm_display(void)
+{
+    wdt_events++;
+    if (wdt_broken)
+        return -1;
+    wdt_armed = true;
+    return 0;
+}
+static bool wdt_armed_now(void) { return wdt_armed; }
+/* iBoot's record of the previous boot, as pmu_counter.c reads it. */
+typedef uint8_t u8;
+#define STAGE1_BOOT_STAGE_KERNEL_STARTED 0x30
+static bool record_unreadable;
+static u8 record_counts, record_stage;
+static unsigned record_reads;
+static int pmu_read_boot_record(u8 *counts, u8 *stage)
+{
+    record_reads++;
+    if (record_unreadable)
+        return -1;
+    *counts = record_counts;
+    *stage = record_stage;
+    return 0;
+}
+%(stopped_early)s
+#define wdt_armed() wdt_armed_now()
 static void wdt_disable(void) { wdt_armed = false; wdt_events++; }
 static int display_configure(const char *config)
 {
@@ -141,7 +166,9 @@ static void boot(u32 chip)
     configures = t8152_inits = dart_queries = config_queries = adt_queries = 0;
     admitted_configures = 0;
     wdt_events = armed_configures = 0;
-    trial_running = wdt_armed = false;
+    trial_running = wdt_armed = wdt_broken = record_unreadable = false;
+    record_counts = record_stage = 0;
+    record_reads = 0;
     /* A Mac with a panel on other firmware: nothing of the HDMI selection matches. */
     os_firmware.version = V15_0B1;
     adt_external = adt_has_phy = adt_has_conv = adt_hdmi_rail = adt_dp2hdmi_rail = false;
@@ -196,7 +223,34 @@ int main(void)
     /* A trial runs under its own watchdog, which display_init() leaves armed. */
     boot_hdmi();
     trial_running = true;
+    wdt_armed = true;
     assert(display_init() == 0 && configures == 1 && !wdt_events);
+    /* The last boot ended before an OS, as one this bring-up hung would have: not tried again,
+     * and the watchdog armed for it is disarmed. */
+    boot_hdmi();
+    record_counts = 1;
+    record_stage = 0x10;
+    assert(display_init() == 0 && !configures && record_reads == 1);
+    assert(wdt_events == 2 && !wdt_armed);
+    /* No record to read: not tried either. */
+    boot_hdmi();
+    record_unreadable = true;
+    assert(display_init() == 0 && !configures && wdt_events == 2 && !wdt_armed);
+    /* A failed boot that had reached the kernel, or panics alone, do not stop it. */
+    boot_hdmi();
+    record_counts = 1;
+    record_stage = 0x30;
+    assert(display_init() == 0 && configures == 1);
+    boot_hdmi();
+    record_counts = 0x20;
+    assert(display_init() == 0 && configures == 1);
+    /* No watchdog can be armed: the port stays as iBoot left it, in a trial too. */
+    boot_hdmi();
+    wdt_broken = true;
+    assert(display_init() == 0 && !configures && wdt_events == 1 && !record_reads);
+    boot_hdmi();
+    trial_running = true;
+    assert(display_init() == 0 && !configures && !wdt_events);
 
     /* Every property is needed: take each away in turn. */
     boot_hdmi();
@@ -253,6 +307,7 @@ int main(void)
 def test_t8140_t8132_return_before_the_dart_path(tmp_path):
     display = (SOURCE / "src/display.c").read_text()
     soc = (SOURCE / "src/soc.h").read_text()
+    proxy = (SOURCE / "src/stage1_proxy.c").read_text()
     chips = "\n".join(re.findall(r"^#define (?:T8140|T8132|T8152|T6000|T6040|T6041|S5L8960X)\s+0x[0-9a-fA-F]+\s*$",
                                  soc, re.M))
     panel = function(display, "static bool display_internal_panel_absent(")
@@ -270,7 +325,9 @@ def test_t8140_t8132_return_before_the_dart_path(tmp_path):
     line = display[:display.index(init)].count("\n") + init[:early].count("\n") + 1
     print(f"display_init() returns early for T8140/T8132 at src/display.c:{line}")
     code = tmp_path / "inherited-only.c"
-    code.write_text(HARNESS % {"chips": chips, "stage_gate": stage_gate, "selection": selection, "display_init": panel + "\n" + init,
+    code.write_text(HARNESS % {"chips": chips, "stage_gate": stage_gate,
+                               "stopped_early": "static " + function(proxy, "bool stage1_previous_boot_stopped_early("),
+                               "selection": selection, "display_init": panel + "\n" + init,
                                "inherited": inherited})
     binary = tmp_path / "inherited-only"
     compiled = subprocess.run([os.environ.get("CC", "cc"), "-std=gnu11", "-O1", "-Wall", "-Wextra",

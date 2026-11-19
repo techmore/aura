@@ -11,7 +11,9 @@
 #include "fb.h"
 #include "firmware.h"
 #include "memory.h"
+#include "pmu_counter.h"
 #include "soc.h"
+#include "stage1_proxy.h"
 #include "string.h"
 #include "utils.h"
 #include "wdt.h"
@@ -1087,15 +1089,38 @@ static bool display_internal_panel_absent(int node, int product)
     return !adt_getprop(adt, product, "raw-panel-serial-number", NULL);
 }
 
-/* The one entry to the HDMI bring-up behind a DCP iBoot left running. */
+/*
+ * The one entry to the HDMI bring-up behind a DCP iBoot left running. It talks to firmware and a
+ * PHY that may stop answering, so it runs only under a counting watchdog (the display one on a
+ * plain boot, the trial's own in a trial) and only when the previous boot reached an OS: iBoot
+ * records in the PMU scratchpad a boot that ended earlier, as one this bring-up hung would, and
+ * the boot after it keeps the display as iBoot left it. No record counts as a failed boot.
+ */
 static int display_init_retained_hdmi(void)
 {
-    printf("display: HDMI port left dark by iBoot, initializing display\n");
     /* A trial already runs under its own watchdog (wdt.c); keep that one armed. */
     bool guarded = !aura_trial_enabled() && !wdt_arm_display();
-    display_retained_admitted = true;
-    int ret = display_configure(NULL);
-    display_retained_admitted = false;
+    if (!guarded && !wdt_armed()) {
+        printf("display: no watchdog to bound the HDMI bring-up, keeping the display as iBoot "
+               "left it\n");
+        return 0;
+    }
+
+    int ret = 0;
+    u8 counts = 0, stage = 0;
+    if (pmu_read_boot_record(&counts, &stage)) {
+        printf("display: no record of the last boot, keeping the display as iBoot left it\n");
+    } else if (stage1_previous_boot_stopped_early(counts, stage)) {
+        printf("display: the last boot ended before an OS (failed boots %u, stage 0x%x), "
+               "keeping the display as iBoot left it\n",
+               counts & 0xf, stage);
+    } else {
+        printf("display: last boot record: failed boots %u, stage 0x%x\n", counts & 0xf, stage);
+        printf("display: HDMI port left dark by iBoot, initializing display\n");
+        display_retained_admitted = true;
+        ret = display_configure(NULL);
+        display_retained_admitted = false;
+    }
     if (guarded)
         wdt_disable();
     return ret;

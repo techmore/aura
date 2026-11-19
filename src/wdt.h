@@ -20,5 +20,6 @@ bool wdt_boot_watchdog_armed(void);
  * answer, short enough that a stuck one resets the Mac instead of leaving it dark */
 #define WDT_DISPLAY_SECONDS 90
 int wdt_arm_display(void);
+bool wdt_armed(void);
 
 #endif

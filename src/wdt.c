@@ -101,6 +101,12 @@ int wdt_arm_display(void)
     return wdt_arm(WDT_DISPLAY_SECONDS);
 }
 
+/* Whether a watchdog this stage armed is counting now. */
+bool wdt_armed(void)
+{
+    return wdt_base && (read32(wdt_base + WDT_CTL) & 4);
+}
+
 int wdt_arm_seconds(unsigned seconds)
 {
     if (chip_id != T8140 && chip_id != T6040)

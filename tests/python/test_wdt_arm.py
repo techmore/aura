@@ -115,6 +115,14 @@ int main(void)
     writes = 0;
     assert(wdt_arm_display() == -1 && writes == 0);
     adt_version = 2;
+
+    /* wdt_armed() reads the control register of the watchdog this stage set up, or nothing */
+    assert(wdt_armed());
+    regs[WDT_CTL/4] = 0;
+    assert(!wdt_armed());
+    regs[WDT_CTL/4] = 4;
+    wdt_base = 0;
+    assert(!wdt_armed());
     return 0;
 }
 '''
